@@ -34,47 +34,25 @@ class CameraStreamRPiCAM:
         self.width = width
         self.height = height
         self.fps = fps
-        self.process = None
         self.temp_dir = tempfile.mkdtemp()
         self.current_frame = None
         self.frame_lock = threading.Lock()
         self.running = False
         self.frame_count = 0
+        self.capture_thread = None
         
         logger.info(f"Initialisation camera {width}x{height} @ {fps} FPS...")
         logger.info(f"Répertoire temp: {self.temp_dir}")
         self._start_camera_stream()
     
     def _start_camera_stream(self):
-        """Lance rpicam-jpeg en mode continu vers des fichiers"""
+        """Lance le thread de capture d'images"""
         try:
-            output_pattern = os.path.join(self.temp_dir, "frame_%03d.jpg")
-            
-            # Capture 10 images par seconde max avec timeout global pour ne pas bloquer
-            cmd = [
-                'rpicam-jpeg',
-                '--width', str(self.width),
-                '--height', str(self.height),
-                '--timeout', '0',  # Infinite
-                '--framerate', str(self.fps),
-                '--quality', '80',
-                '--output', output_pattern,
-                '--nopreview'
-            ]
-            
-            logger.info(f"Commande: {' '.join(cmd)}")
-            
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
             self.running = True
             
-            # Thread pour lire les frames au fur et à mesure
-            read_thread = threading.Thread(target=self._read_jpeg_frames, daemon=True)
-            read_thread.start()
+            # Thread pour capturer les images en boucle
+            self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self.capture_thread.start()
             
             logger.info("✓ Camera stream lancé (rpicam-jpeg)")
             
@@ -82,18 +60,40 @@ class CameraStreamRPiCAM:
             logger.error(f"✗ Erreur démarrage camera: {e}")
             self.running = False
     
-    def _read_jpeg_frames(self):
-        """Lit les frames JPEG au fur et à mesure qu'elles sont générées"""
+    def _capture_loop(self):
+        """Capture des images JPEG en boucle"""
+        frame_delay = 1.0 / self.fps
+        frame_id = 0
+        
         try:
-            frame_id = 0
-            missing_count = 0
-            
             while self.running:
-                # Chercher le fichier de la frame actuelle
-                frame_file = os.path.join(self.temp_dir, f"frame_{frame_id:03d}.jpg")
+                start_time = time.time()
                 
-                if os.path.exists(frame_file):
-                    try:
+                # Fichier de sortie temporaire
+                frame_file = os.path.join(self.temp_dir, "current_frame.jpg")
+                
+                # Capturer une image unique avec rpicam-jpeg
+                cmd = [
+                    'rpicam-jpeg',
+                    '--width', str(self.width),
+                    '--height', str(self.height),
+                    '--timeout', '1',  # 1ms de capture rapide
+                    '--quality', '80',
+                    '--output', frame_file,
+                    '--nopreview'
+                ]
+                
+                try:
+                    # Lancer la commande et attendre qu'elle se termine
+                    result = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=2
+                    )
+                    
+                    # Lire l'image capturée
+                    if os.path.exists(frame_file):
                         frame = cv2.imread(frame_file)
                         
                         if frame is not None:
@@ -101,32 +101,33 @@ class CameraStreamRPiCAM:
                                 self.current_frame = frame.copy()
                                 self.frame_count += 1
                             
-                            # Supprimer l'ancien fichier pour économiser l'espace
-                            if frame_id > 0:
-                                old_file = os.path.join(self.temp_dir, f"frame_{frame_id-1:03d}.jpg")
-                                if os.path.exists(old_file):
-                                    try:
-                                        os.remove(old_file)
-                                    except:
-                                        pass
-                            
                             frame_id += 1
-                            missing_count = 0
-                        
-                    except Exception as e:
-                        logger.debug(f"Erreur lecture frame {frame_id}: {e}")
-                else:
-                    missing_count += 1
-                    if missing_count < 10:
-                        time.sleep(0.05)  # Attendre que la frame soit générée
+                            
+                            if frame_id % 50 == 0:
+                                logger.debug(f"Frame {frame_id} capturée")
+                        else:
+                            logger.warning(f"Frame vide lue depuis {frame_file}")
                     else:
-                        time.sleep(0.1)
-                        missing_count = 0
+                        logger.warning(f"Fichier {frame_file} non créé")
+                
+                except subprocess.TimeoutExpired:
+                    logger.warning("Timeout lors de la capture")
+                except Exception as e:
+                    logger.error(f"Erreur capture frame: {e}")
+                
+                # Attendre pour respecter le FPS
+                elapsed = time.time() - start_time
+                sleep_time = max(0, frame_delay - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
         
         except Exception as e:
-            logger.error(f"Erreur lecture frames: {e}")
+            logger.error(f"Erreur dans la boucle de capture: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.running = False
+            logger.info("Boucle de capture arrêtée")
     
     def get_frame(self):
         """Récupère la frame actuelle"""
@@ -137,20 +138,21 @@ class CameraStreamRPiCAM:
     
     def stop(self):
         """Arrête la capture"""
+        logger.info("Arrêt de la capture caméra...")
         self.running = False
-        if self.process:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=2)
-            except:
-                self.process.kill()
+        
+        # Attendre que le thread de capture se termine
+        if self.capture_thread and self.capture_thread.is_alive():
+            self.capture_thread.join(timeout=2)
         
         # Nettoyer les fichiers temp
         try:
             import shutil
-            shutil.rmtree(self.temp_dir)
-        except:
-            pass
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Répertoire temp nettoyé: {self.temp_dir}")
+        except Exception as e:
+            logger.warning(f"Erreur nettoyage temp: {e}")
 
 
 class ObjectDetector:
@@ -266,7 +268,7 @@ class MJPEGStreamHandler(BaseHTTPRequestHandler):
             <img id="video" src="/stream" />
             <div class="info">
                 <h3>Accès SSH depuis PC:</h3>
-                <div class="code">ssh -L 8080:localhost:8080 user@10.187.69.95</div>
+                <div class="code">ssh -L 8080:localhost:8080 user@172.25.206.44</div>
                 <p>Puis ouvrir: <code>http://localhost:8080</code></p>
             </div>
         </body>
@@ -413,7 +415,7 @@ class HexapodeCameraStreamer:
         try:
             logger.info(f"✓ Serveur écoutant sur http://0.0.0.0:{self.port}")
             logger.info(f"  Accès local: http://localhost:{self.port}")
-            logger.info(f"  Via SSH: ssh -L {self.port}:localhost:{self.port} user@10.187.69.95")
+            logger.info(f"  Via SSH: ssh -L {self.port}:localhost:{self.port} user@172.25.206.44")
             logger.info("")
             self.server.serve_forever()
         except KeyboardInterrupt:

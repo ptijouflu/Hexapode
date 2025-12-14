@@ -28,12 +28,8 @@ class Controller:
 
     def disable_torque_all(self):
         """
-        Désactive le torque de tous les servos et ferme le port série.
+        Désactive le torque de tous les servos en supprimant l'objet interface
+        (appelle automatiquement __del__ de HexapodSetup qui désactive les servos)
         """
-        # Liste des IDs de tes servos (exemple)
-        dxl_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        for dxl_id in dxl_ids:
-            # Désactive le torque pour chaque servo
-            self._interface.set_torque_enable(dxl_id, 0)
-        # Ferme le port série
-        self._interface.close_port()
+        if hasattr(self, '_interface'):
+            del self._interface

@@ -12,16 +12,8 @@ PROTOCOL_VERSION    = 2.0
 DXL_IDS             = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 # --- REGLAGES D'AMPLITUDE ---
-# Pour la marche avant/arrière (Z/S), on peut se permettre de grands mouvements
-FACTOR_WALK    = 1.5 
-
-# Pour la translation (Q/D), on doit RESTER CALME. 
-# Si on met > 1.0, les pattes se cognent (géométrie de l'hexapode).
-# 1.0 = Mouvement original du fichier Robotis
-# 0.9 = Mouvement légèrement réduit pour plus de sécurité
-FACTOR_SLIDE   = 0.9 
-
-# Pour la rotation (A/E), on ne touche à rien
+FACTOR_WALK    = 2 
+FACTOR_SLIDE   = 1.2 # On garde 0.9 pour la translation, c'est plus sûr
 FACTOR_TURN    = 1.0
 
 # Adresses Mémoire (XL430-W250)
@@ -65,22 +57,30 @@ SEQ_MOVE_B = [
     [52, -40, -40, -10, 10, -10, -10, -10, -50, -10, 62, -20]
 ]
 
-# Translation Gauche (Slide L)
-SEQ_SLIDE_L = [
-    [40, -25, 0, -35, 8, -50, -8, -60, -40, -25, 0, -35],
-    [-10, -50, 10, -20, 8, -30, -8, -20, 10, -50, -10, -20],
-    [-10, -20, 10, -40, 8, -30, -8, -20, 10, -20, -10, -40],
-    [-10, -20, -40, -40, 8, -30, -8, -20, 10, -20, 40, -40],
-    [-10, -30, -60, -20, 8, -50, -8, -50, 10, -30, 60, -20]
+# --- CORRECTION DES SEQUENCES DE TRANSLATION ---
+
+# Translation Droite (Slide R) - CORRIGÉE
+# On force la patte avant gauche (ID 3) à reculer (valeur plus négative)
+# pour libérer le passage à la patte droite.
+SEQ_SLIDE_R = [
+    # M1    M2    M3(Recul) M4   M5   M6   M7   M8   M9   M10  M11  M12
+    [0,    -35,  -60,     -25,  8,  -60, -8,  -50,  0,  -35,  40, -25],
+    [-10,  -20,  -50,     -50,  8,  -20, -8,  -30,  10, -20, -10, -50],
+    [-10,  -40,  -50,     -20,  8,  -20, -8,  -30,  10, -40, -10, -20],
+    [40,   -40,  -50,     -20,  8,  -20, -8,  -30, -40, -40, -10, -20],
+    [60,   -20,  -60,     -30,  8,  -50, -8,  -50, -60, -20, -10, -30]
 ]
 
-# Translation Droite (Slide R)
-SEQ_SLIDE_R = [
-    [0, -35, -40, -25, 8, -60, -8, -50, 0, -35, 40, -25],
-    [-10, -20, 10, -50, 8, -20, -8, -30, 10, -20, -10, -50],
-    [-10, -40, 10, -20, 8, -20, -8, -30, 10, -40, -10, -20],
-    [40, -40, 10, -20, 8, -20, -8, -30, -40, -40, -10, -20],
-    [60, -20, 10, -30, 8, -50, -8, -50, -60, -20, -10, -30]
+# Translation Gauche (Slide L) - CORRIGÉE
+# On force la patte avant droite (ID 1) à reculer (valeur plus positive/grande)
+# pour libérer le passage à la patte gauche.
+SEQ_SLIDE_L = [
+    # M1(Recul) M2   M3    M4   M5   M6   M7   M8   M9   M10  M11  M12
+    [60,       -25,  0,   -35,  8,  -50, -8,  -60, -40, -25,  0,  -35],
+    [50,       -50,  10,  -20,  8,  -30, -8,  -20,  10, -50, -10, -20],
+    [50,       -20,  10,  -40,  8,  -30, -8,  -20,  10, -20, -10, -40],
+    [50,       -20, -40,  -40,  8,  -30, -8,  -20,  10, -20,  40, -40],
+    [60,       -30, -60,  -20,  8,  -50, -8,  -50,  10, -30,  60, -20]
 ]
 
 # Rotation Gauche (Pivot L)
@@ -107,13 +107,11 @@ def deg2dxl(deg):
 def amplify_sequence(sequence, factor):
     new_sequence = []
     num_motors = len(sequence[0])
-    # Calcul du "centre" moyen du mouvement pour chaque moteur
     means = [sum(step[i] for step in sequence) / len(sequence) for i in range(num_motors)]
     
     for step in sequence:
         new_step = []
         for i in range(num_motors):
-            # On écarte les valeurs par rapport à la moyenne
             delta = step[i] - means[i]
             new_val = means[i] + (delta * factor)
             new_step.append(new_val)
@@ -156,11 +154,8 @@ for mid in DXL_IDS:
 moves = {
     'z': amplify_sequence(SEQ_MOVE_F, FACTOR_WALK),    # Avancer : Amplitude x1.5
     's': amplify_sequence(SEQ_MOVE_B, FACTOR_WALK),    # Reculer : Amplitude x1.5
-    
-    # ICI LE CORRECTIF : On utilise FACTOR_SLIDE (0.9 ou 1.0)
     'q': amplify_sequence(SEQ_SLIDE_L, FACTOR_SLIDE),  # Gauche : Normal / Réduit
     'd': amplify_sequence(SEQ_SLIDE_R, FACTOR_SLIDE),  # Droite : Normal / Réduit
-    
     'a': amplify_sequence(SEQ_PIVOT_L, FACTOR_TURN),   # Rotation
     'e': amplify_sequence(SEQ_PIVOT_R, FACTOR_TURN),   # Rotation
     'stop': [INIT_POSE]
@@ -172,8 +167,8 @@ step_index = 0
 print("--- HEXAPODE CONTROLE (ZQSD + AE) ---")
 print(" [Z] Avancer (Rapide)")
 print(" [S] Reculer (Rapide)")
-print(" [Q] Pas Chassé Gauche (Précis)")
-print(" [D] Pas Chassé Droite (Précis)")
+print(" [Q] Pas Chassé Gauche (Optimisé)")
+print(" [D] Pas Chassé Droite (Optimisé)")
 print(" [A] Rotation Gauche")
 print(" [E] Rotation Droite")
 print(" [ESPACE] Stop")
@@ -189,7 +184,6 @@ try:
             if key in moves:
                 if current_mode != key: 
                     step_index = 0
-                    # Petit délai de sécurité quand on change de direction pour stabiliser
                     time.sleep(0.1) 
                 current_mode = key
                 print(f"\r >> ACTION: {key.upper()}      ", end="")
@@ -209,7 +203,6 @@ try:
         
         # Gestion des vitesses (Delay)
         if current_mode in ['q', 'd']:
-            # On ralentit un peu la translation pour laisser le temps aux pattes de bien se lever
             time.sleep(0.15) 
         elif current_mode in ['a', 'e']:
             time.sleep(0.15)
