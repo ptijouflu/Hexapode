@@ -17,37 +17,35 @@ class ColorDetection:
 
     # Plages de couleurs en HSV (H: 0-180, S: 0-255, V: 0-255)
     # IMPORTANT: OpenCV utilise H: 0-180 (pas 0-360 comme HSV classique)
-    # Calibration adaptée pour les vraies couleurs détectées
+    # Calibration personnalisée - Généré le 2025-12-16 15:21:22
     
-    # Rouge (0-10° et 160-180° car teinte dominante ≈ 163-172)
-    RED_LOWER1 = np.array([0, 30, 30])
-    RED_UPPER1 = np.array([10, 255, 255])
-    RED_LOWER2 = np.array([160, 30, 30])
-    RED_UPPER2 = np.array([180, 255, 255])
+    # 🔴 ROUGE
+    RED_LOWER = np.array([0, 251, 249])
+    RED_UPPER = np.array([6, 255, 255])
     
-    # Orange (10-25°)
-    ORANGE_LOWER = np.array([10, 50, 50])
-    ORANGE_UPPER = np.array([25, 255, 255])
+    # 🟣 MAGENTA
+    MAGENTA_LOWER = np.array([149, 255, 254])
+    MAGENTA_UPPER = np.array([150, 255, 255])
     
-    # Jaune (25-40°)
-    YELLOW_LOWER = np.array([25, 50, 50])
-    YELLOW_UPPER = np.array([40, 255, 255])
+    # 🔵 BLEU FONCÉ
+    DARKBLUE_LOWER = np.array([120, 255, 254])
+    DARKBLUE_UPPER = np.array([120, 255, 254])
     
-    # Vert (40-80°)
-    GREEN_LOWER = np.array([40, 30, 30])
-    GREEN_UPPER = np.array([80, 255, 255])
+    # 💙 CYAN
+    CYAN_LOWER = np.array([90, 152, 203])
+    CYAN_UPPER = np.array([91, 173, 227])
     
-    # Cyan (80-100°)
-    CYAN_LOWER = np.array([80, 30, 30])
-    CYAN_UPPER = np.array([100, 255, 255])
+    # 🟢 VERT
+    GREEN_LOWER = np.array([62, 182, 231])
+    GREEN_UPPER = np.array([69, 206, 251])
     
-    # Bleu (100-140°)
-    BLUE_LOWER = np.array([100, 30, 30])
-    BLUE_UPPER = np.array([140, 255, 255])
+    # 🟡 JAUNE
+    YELLOW_LOWER = np.array([31, 250, 224])
+    YELLOW_UPPER = np.array([32, 255, 245])
     
-    # Violet/Magenta (140-160°)
-    VIOLET_LOWER = np.array([140, 30, 30])
-    VIOLET_UPPER = np.array([160, 255, 255])
+    # ⚪ BLANC
+    WHITE_LOWER = np.array([91, 28, 195])
+    WHITE_UPPER = np.array([94, 41, 220])
 
     # Surface minimale pour considérer une couleur comme détectée
     MIN_CONTOUR_AREA = 200
@@ -66,31 +64,37 @@ class ColorDetection:
         detected_colors = {}  # {nom: emoji}
         color_areas = {}      # {nom: surface totale}
 
-        # Détection du ROUGE (deux plages car le rouge entoure 0°)
-        mask_red1 = cv2.inRange(hsv, ColorDetection.RED_LOWER1, ColorDetection.RED_UPPER1)
-        mask_red2 = cv2.inRange(hsv, ColorDetection.RED_LOWER2, ColorDetection.RED_UPPER2)
-        mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+        # Détection du ROUGE
+        mask_red = cv2.inRange(hsv, ColorDetection.RED_LOWER, ColorDetection.RED_UPPER)
         contours_red, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         red_area = sum(cv2.contourArea(c) for c in contours_red)
         if red_area > ColorDetection.MIN_CONTOUR_AREA:
             detected_colors['red'] = '🔴 ROUGE'
             color_areas['red'] = red_area
 
-        # Détection de l'ORANGE
-        mask_orange = cv2.inRange(hsv, ColorDetection.ORANGE_LOWER, ColorDetection.ORANGE_UPPER)
-        contours_orange, _ = cv2.findContours(mask_orange, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        orange_area = sum(cv2.contourArea(c) for c in contours_orange)
-        if orange_area > ColorDetection.MIN_CONTOUR_AREA:
-            detected_colors['orange'] = '🟠 ORANGE'
-            color_areas['orange'] = orange_area
+        # Détection du MAGENTA
+        mask_magenta = cv2.inRange(hsv, ColorDetection.MAGENTA_LOWER, ColorDetection.MAGENTA_UPPER)
+        contours_magenta, _ = cv2.findContours(mask_magenta, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        magenta_area = sum(cv2.contourArea(c) for c in contours_magenta)
+        if magenta_area > ColorDetection.MIN_CONTOUR_AREA:
+            detected_colors['magenta'] = '🟣 MAGENTA'
+            color_areas['magenta'] = magenta_area
 
-        # Détection du JAUNE
-        mask_yellow = cv2.inRange(hsv, ColorDetection.YELLOW_LOWER, ColorDetection.YELLOW_UPPER)
-        contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        yellow_area = sum(cv2.contourArea(c) for c in contours_yellow)
-        if yellow_area > ColorDetection.MIN_CONTOUR_AREA:
-            detected_colors['yellow'] = '🟡 JAUNE'
-            color_areas['yellow'] = yellow_area
+        # Détection du BLEU FONCÉ
+        mask_darkblue = cv2.inRange(hsv, ColorDetection.DARKBLUE_LOWER, ColorDetection.DARKBLUE_UPPER)
+        contours_darkblue, _ = cv2.findContours(mask_darkblue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        darkblue_area = sum(cv2.contourArea(c) for c in contours_darkblue)
+        if darkblue_area > ColorDetection.MIN_CONTOUR_AREA:
+            detected_colors['darkblue'] = '🔵 BLEU FONCÉ'
+            color_areas['darkblue'] = darkblue_area
+
+        # Détection du CYAN
+        mask_cyan = cv2.inRange(hsv, ColorDetection.CYAN_LOWER, ColorDetection.CYAN_UPPER)
+        contours_cyan, _ = cv2.findContours(mask_cyan, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cyan_area = sum(cv2.contourArea(c) for c in contours_cyan)
+        if cyan_area > ColorDetection.MIN_CONTOUR_AREA:
+            detected_colors['cyan'] = '💙 CYAN'
+            color_areas['cyan'] = cyan_area
 
         # Détection du VERT
         mask_green = cv2.inRange(hsv, ColorDetection.GREEN_LOWER, ColorDetection.GREEN_UPPER)
@@ -100,29 +104,21 @@ class ColorDetection:
             detected_colors['green'] = '🟢 VERT'
             color_areas['green'] = green_area
 
-        # Détection du CYAN
-        mask_cyan = cv2.inRange(hsv, ColorDetection.CYAN_LOWER, ColorDetection.CYAN_UPPER)
-        contours_cyan, _ = cv2.findContours(mask_cyan, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cyan_area = sum(cv2.contourArea(c) for c in contours_cyan)
-        if cyan_area > ColorDetection.MIN_CONTOUR_AREA:
-            detected_colors['cyan'] = '🔵 CYAN'
-            color_areas['cyan'] = cyan_area
+        # Détection du JAUNE
+        mask_yellow = cv2.inRange(hsv, ColorDetection.YELLOW_LOWER, ColorDetection.YELLOW_UPPER)
+        contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        yellow_area = sum(cv2.contourArea(c) for c in contours_yellow)
+        if yellow_area > ColorDetection.MIN_CONTOUR_AREA:
+            detected_colors['yellow'] = '🟡 JAUNE'
+            color_areas['yellow'] = yellow_area
 
-        # Détection du BLEU
-        mask_blue = cv2.inRange(hsv, ColorDetection.BLUE_LOWER, ColorDetection.BLUE_UPPER)
-        contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blue_area = sum(cv2.contourArea(c) for c in contours_blue)
-        if blue_area > ColorDetection.MIN_CONTOUR_AREA:
-            detected_colors['blue'] = '🔵 BLEU'
-            color_areas['blue'] = blue_area
-
-        # Détection du VIOLET
-        mask_violet = cv2.inRange(hsv, ColorDetection.VIOLET_LOWER, ColorDetection.VIOLET_UPPER)
-        contours_violet, _ = cv2.findContours(mask_violet, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        violet_area = sum(cv2.contourArea(c) for c in contours_violet)
-        if violet_area > ColorDetection.MIN_CONTOUR_AREA:
-            detected_colors['violet'] = '🟣 VIOLET'
-            color_areas['violet'] = violet_area
+        # Détection du BLANC
+        mask_white = cv2.inRange(hsv, ColorDetection.WHITE_LOWER, ColorDetection.WHITE_UPPER)
+        contours_white, _ = cv2.findContours(mask_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        white_area = sum(cv2.contourArea(c) for c in contours_white)
+        if white_area > ColorDetection.MIN_CONTOUR_AREA:
+            detected_colors['white'] = '⚪ BLANC'
+            color_areas['white'] = white_area
 
         return detected_colors, color_areas
 
@@ -252,12 +248,12 @@ class CameraManager:
         # Récupérer l'emoji correspondant (basé sur le dictionnaire de ColorDetection)
         color_emojis = {
             'red': '🔴 ROUGE',
-            'orange': '🟠 ORANGE',
-            'yellow': '🟡 JAUNE',
+            'magenta': '🟣 MAGENTA',
+            'darkblue': '🔵 BLEU FONCÉ',
+            'cyan': '💙 CYAN',
             'green': '🟢 VERT',
-            'cyan': '🔵 CYAN',
-            'blue': '🔵 BLEU',
-            'violet': '🟣 VIOLET'
+            'yellow': '🟡 JAUNE',
+            'white': '⚪ BLANC'
         }
         
         emoji = color_emojis.get(color_name, '❓ INCONNU')

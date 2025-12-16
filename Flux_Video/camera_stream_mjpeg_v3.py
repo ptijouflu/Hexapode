@@ -77,20 +77,30 @@ class CameraStreamRPiCAM:
                     'rpicam-jpeg',
                     '--width', str(self.width),
                     '--height', str(self.height),
-                    '--timeout', '1',  # 1ms de capture rapide
+                    '--timeout', '1000',  # 1000ms = 1s (nécessaire pour initialisation caméra)
                     '--quality', '80',
                     '--output', frame_file,
                     '--nopreview'
                 ]
                 
+                process = None
                 try:
                     # Lancer la commande et attendre qu'elle se termine
-                    result = subprocess.run(
+                    process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=2
+                        stderr=subprocess.PIPE
                     )
+                    
+                    # Attendre avec timeout
+                    try:
+                        stdout, stderr = process.communicate(timeout=3)
+                        result = type('obj', (object,), {'returncode': process.returncode, 'stdout': stdout, 'stderr': stderr})()
+                    except subprocess.TimeoutExpired:
+                        # Tuer proprement le processus en cas de timeout
+                        process.kill()
+                        process.wait()
+                        raise
                     
                     # Lire l'image capturée
                     if os.path.exists(frame_file):
@@ -103,7 +113,10 @@ class CameraStreamRPiCAM:
                             
                             frame_id += 1
                             
-                            if frame_id % 50 == 0:
+                            # Log lors de la première capture
+                            if frame_id == 1:
+                                logger.info(f"✓ Première frame capturée ({frame.shape})")
+                            elif frame_id % 50 == 0:
                                 logger.debug(f"Frame {frame_id} capturée")
                         else:
                             logger.warning(f"Frame vide lue depuis {frame_file}")
@@ -111,9 +124,21 @@ class CameraStreamRPiCAM:
                         logger.warning(f"Fichier {frame_file} non créé")
                 
                 except subprocess.TimeoutExpired:
-                    logger.warning("Timeout lors de la capture")
+                    logger.warning("Timeout lors de la capture (>3s)")
+                    if process:
+                        try:
+                            process.kill()
+                            process.wait()
+                        except:
+                            pass
                 except Exception as e:
                     logger.error(f"Erreur capture frame: {e}")
+                    if process and process.poll() is None:
+                        try:
+                            process.kill()
+                            process.wait()
+                        except:
+                            pass
                 
                 # Attendre pour respecter le FPS
                 elapsed = time.time() - start_time
