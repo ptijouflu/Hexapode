@@ -20,6 +20,9 @@ import termios
 import tty
 from collections import deque
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+import json
 
 # Ajouter le chemin parent pour importer les modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,6 +57,10 @@ LEN_GOAL_POSITION = 4
 # Facteurs d'amplitude
 FACTOR_WALK = 2
 FACTOR_SLIDE = 1.2
+FACTOR_TURN = 1.0
+
+# Configuration serveur HTTP
+HTTP_PORT = 8080
 
 # Position initiale
 INIT_POSE = [30, -30, -30, -30, 15, -30, -15, -30, -30, -30, 30, -30]
@@ -88,6 +95,22 @@ SEQ_SLIDE_L = [
     [50, -20, 10, -40, 8, -30, -8, -20, 10, -20, -10, -40],
     [50, -20, -40, -40, 8, -30, -8, -20, 10, -20, 40, -40],
     [60, -30, -60, -20, 8, -50, -8, -50, 10, -30, 60, -20]
+]
+
+# Rotation Gauche (Pivot L)
+SEQ_PIVOT_L = [
+    [55, -20, -55, -40, -7, -40, 7, -20, -35, -20, 35, -40],
+    [70, -10, -70, -10, -22, -10, 22, -10, -20, -10, 20, -10],
+    [55.29, -40, -55.29, -20, -7.29, -20, 7.29, -40, -34.71, -40, 34.71, -20],
+    [40, -10, -40, -10, 8, -10, -8, -10, -50, -10, 50, -10]
+]
+
+# Rotation Droite (Pivot R)
+SEQ_PIVOT_R = [
+    [25, -20, -25, -40, 23, -40, -23, -20, -65, -20, 65, -40],
+    [10, -10, -10, -10, 38, -10, -38, -10, -80, -10, 80, -10],
+    [25.29, -40, -25.29, -20, 22.71, -20, -22.71, -40, -64.71, -40, 64.71, -20],
+    [40, -10, -40, -10, 8, -10, -8, -10, -50, -10, 50, -10]
 ]
 
 
@@ -134,6 +157,131 @@ class KeyboardHandler:
     def restore(self):
         """Restaure les paramètres du terminal"""
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+
+
+# ============================================================================
+# SERVEUR HTTP STREAMING
+# ============================================================================
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """Serveur HTTP multi-thread pour meilleure réactivité"""
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+class StreamHandler(BaseHTTPRequestHandler):
+    """Handler HTTP pour streaming vidéo en temps réel"""
+    
+    shared_frame = None
+    shared_lock = threading.Lock()
+    shared_stats = {
+        'fps': 0, 'obstacles': 0, 'danger': 'INIT', 
+        'action': 'stop', 'state': 'INIT', 'paused': False
+    }
+    
+    protocol_version = 'HTTP/1.1'
+    
+    def do_GET(self):
+        if self.path == '/':
+            self._send_html()
+        elif self.path == '/stream':
+            self._send_stream()
+        elif self.path == '/status':
+            self._send_status()
+        else:
+            self.send_error(404)
+    
+    def _send_html(self):
+        html = '''<!DOCTYPE html>
+<html><head>
+<title>Hexapode Navigation</title>
+<meta charset="utf-8">
+<style>
+body{font-family:Arial;background:#111;color:#eee;text-align:center;margin:10px}
+h1{color:#0f8;margin:10px 0}
+#v{max-width:95%;border:2px solid #0f8;border-radius:8px}
+#s{margin:10px;padding:10px;border-radius:5px;font-size:18px;font-weight:bold}
+#action{font-size:24px;margin:10px}
+.info{font-size:12px;color:#888;margin-top:10px}
+.leg{display:inline-block;background:#222;padding:10px;border-radius:5px;margin:10px;text-align:left}
+.leg span{display:inline-block;width:12px;height:12px;margin-right:5px;border-radius:2px}
+.paused{background:#f80!important;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:0.5}}
+.controls{background:#222;padding:15px;border-radius:8px;margin:10px auto;max-width:400px}
+</style>
+<script>
+function u(){fetch('/status').then(r=>r.json()).then(d=>{
+let s=document.getElementById('s');
+let a=document.getElementById('action');
+let actions={'forward':'⬆️ AVANCE','slide_left':'⬅️ GAUCHE','slide_right':'➡️ DROITE','pivot_left':'↩️ ROT.GAUCHE','pivot_right':'↪️ ROT.DROITE','stop':'🛑 STOP'};
+a.innerHTML=d.paused?'⏸️ PAUSE':actions[d.action]||d.action;
+a.className=d.paused?'paused':'';
+s.innerHTML='État: '+d.state+' | Danger: '+d.danger+' | Obs: '+d.obstacles+' | '+d.fps.toFixed(1)+' det/s';
+s.style.background=d.danger=='STOP'?'#f00':d.danger=='WARN'?'#f80':d.danger=='OBS'?'#ff0':'#0f0';
+s.style.color=d.danger=='OBS'||d.danger=='OK'?'#000':'#fff';
+if(d.paused)s.style.background='#f80';
+}).catch(e=>{});}
+setInterval(u,200);
+</script>
+</head><body>
+<h1>🤖 Hexapode - Navigation Autonome</h1>
+<div id="action">Chargement...</div>
+<img id="v" src="/stream">
+<div id="s">Connexion...</div>
+<div class="controls">
+<b>Contrôles (sur le robot):</b><br>
+ESPACE = Pause/Reprendre<br>
+Ctrl+C ou Q = Quitter
+</div>
+<div class="leg">
+<span style="background:#0f0"></span>OK - Libre
+<span style="background:#ff0;margin-left:15px"></span>OBS - Obstacle
+<span style="background:#f80;margin-left:15px"></span>WARN - Attention
+<span style="background:#f00;margin-left:15px"></span>STOP - Danger
+</div>
+<div class="info">SSH: ssh -L 8080:localhost:8080 user@[IP] puis http://localhost:8080</div>
+</body></html>'''
+        
+        data = html.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.send_header('Content-Length', len(data))
+        self.end_headers()
+        self.wfile.write(data)
+    
+    def _send_status(self):
+        with self.shared_lock:
+            data = json.dumps(self.shared_stats).encode()
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', len(data))
+        self.end_headers()
+        self.wfile.write(data)
+    
+    def _send_stream(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=F')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        
+        try:
+            while True:
+                with self.shared_lock:
+                    frame = self.shared_frame
+                
+                if frame is not None:
+                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    self.wfile.write(b'--F\r\nContent-Type:image/jpeg\r\n\r\n')
+                    self.wfile.write(buf)
+                    self.wfile.write(b'\r\n')
+                
+                time.sleep(0.05)  # ~20 FPS max affichage
+        except:
+            pass
+    
+    def log_message(self, *args):
+        pass  # Désactiver les logs HTTP
 
 
 # ============================================================================
@@ -443,6 +591,8 @@ class MotorController:
         self.seq_forward = amplify_sequence(SEQ_MOVE_F, FACTOR_WALK)
         self.seq_slide_left = amplify_sequence(SEQ_SLIDE_L, FACTOR_SLIDE)
         self.seq_slide_right = amplify_sequence(SEQ_SLIDE_R, FACTOR_SLIDE)
+        self.seq_pivot_left = amplify_sequence(SEQ_PIVOT_L, FACTOR_TURN)
+        self.seq_pivot_right = amplify_sequence(SEQ_PIVOT_R, FACTOR_TURN)
         
         self.step_index = 0
         self.current_action = 'stop'
@@ -534,11 +684,29 @@ class MotorController:
         self._write_positions(self.seq_slide_right[self.step_index])
         self.step_index = (self.step_index + 1) % len(self.seq_slide_right)
     
+    def pivot_left(self):
+        """Rotation gauche d'un pas"""
+        if self.current_action != 'pivot_left':
+            self.step_index = 0
+        self.current_action = 'pivot_left'
+        self._write_positions(self.seq_pivot_left[self.step_index])
+        self.step_index = (self.step_index + 1) % len(self.seq_pivot_left)
+    
+    def pivot_right(self):
+        """Rotation droite d'un pas"""
+        if self.current_action != 'pivot_right':
+            self.step_index = 0
+        self.current_action = 'pivot_right'
+        self._write_positions(self.seq_pivot_right[self.step_index])
+        self.step_index = (self.step_index + 1) % len(self.seq_pivot_right)
+    
     def get_delay(self):
-        """Retourne le délai selon l'action"""
+        """Retourne le délai selon l'action (ralenti pour meilleure détection)"""
         if self.current_action in ['slide_left', 'slide_right']:
-            return 0.15
-        return 0.08
+            return 0.25  # Translation
+        elif self.current_action in ['pivot_left', 'pivot_right']:
+            return 0.20  # Rotation
+        return 0.15  # Marche avant
     
     def disconnect(self):
         if self.connected:
@@ -564,17 +732,19 @@ class AutonomousNavigator:
     1. Avancer par défaut
     2. Si obstacle à gauche -> translation droite
     3. Si obstacle à droite -> translation gauche
-    4. Si obstacle au centre -> stop puis décider
-    5. Si libre -> reprendre avance
+    4. Si obstacle au centre (DANGER) -> ROTATION vers le côté sûr puis avance
+    5. Si obstacles des deux côtés -> rotation vers le côté le moins dangereux
+    6. Si libre -> reprendre avance
     
     Contrôles:
-    - ESPACE: Pause/Reprendre (arrête moteurs + position initiale)
+    - ESPACE: Démarrer/Pause/Reprendre (arrête moteurs + position initiale)
     - Ctrl+C: Quitter complètement
     """
     
     def __init__(self):
         self.running = False
-        self.paused = False  # État pause
+        self.paused = True  # Démarre en pause, attente ESPACE
+        self.started = False  # Premier démarrage pas encore fait
         self.quit_requested = False  # Demande de quitter
         
         # Gestion clavier
@@ -590,12 +760,23 @@ class AutonomousNavigator:
         )
         self.motors = MotorController()
         
+        # Serveur HTTP pour streaming
+        self.http_server = None
+        self.http_thread = None
+        self._start_http_server()
+        
         # État
         self.current_state = "INIT"
         self.last_obstacle_position = None
         self.escape_direction = None
         self.escape_steps = 0
         self.max_escape_steps = 10  # Max pas de translation avant de réessayer
+        
+        # Gestion rotation en cas de danger
+        self.danger_count = 0  # Compteur de détections STOP consécutives
+        self.rotation_steps = 0  # Nombre de pas de rotation effectués
+        self.rotation_direction = None  # Direction de rotation choisie
+        self.post_rotation_forward = 0  # Pas d'avance après rotation
         
         # Stats
         self.detection_count = 0
@@ -604,24 +785,84 @@ class AutonomousNavigator:
         time.sleep(1)  # Attendre initialisation camera
         logger.info("✓ Navigateur autonome initialisé")
     
-    def _decide_action(self, danger, position):
+    def _start_http_server(self):
+        """Démarre le serveur HTTP pour le streaming"""
+        try:
+            self.http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), StreamHandler)
+            self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+            self.http_thread.start()
+            logger.info(f"✓ Serveur HTTP sur port {HTTP_PORT}")
+            logger.info(f"  SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
+            logger.info(f"  Puis: http://localhost:{HTTP_PORT}")
+        except Exception as e:
+            logger.warning(f"Impossible de démarrer le serveur HTTP: {e}")
+    
+    def _decide_action(self, danger, position, obstacles):
         """
         Machine à états pour décider de l'action
-        Retourne: 'forward', 'slide_left', 'slide_right', 'stop'
-        Seuils ajustés pour format large (640x240)
+        Retourne: 'forward', 'slide_left', 'slide_right', 'pivot_left', 'pivot_right', 'stop'
+        
+        Nouvelle logique:
+        - STOP (danger proche) -> Rotation vers le côté le plus sûr
+        - Après rotation -> Avancer quelques pas pour vérifier
         """
         
-        # Obstacle au centre proche -> STOP
-        if danger == "STOP":
-            self.current_state = "BLOCKED"
-            # Choisir direction d'échappement si pas déjà définie
-            if self.escape_direction is None:
-                self.escape_direction = "LEFT"  # Par défaut gauche
-            # Essayer de contourner au lieu de rester bloqué
-            if self.escape_direction == "LEFT":
-                return 'slide_left'
+        # Si on est en train de faire des pas d'avance après rotation
+        if self.post_rotation_forward > 0:
+            self.post_rotation_forward -= 1
+            self.current_state = "POST_ROTATION"
+            if self.post_rotation_forward == 0:
+                self.rotation_direction = None
+            return 'forward'
+        
+        # Si on est en train de tourner (rotation en cours)
+        if self.rotation_steps > 0:
+            self.rotation_steps -= 1
+            self.current_state = "ROTATING"
+            if self.rotation_steps == 0:
+                # Fin de rotation, avancer quelques pas
+                self.post_rotation_forward = 5  # Avancer 5 pas après rotation
+                logger.info("🚀 Rotation terminée, reprise de l'avance")
+            if self.rotation_direction == "LEFT":
+                return 'pivot_left'
             else:
-                return 'slide_right'
+                return 'pivot_right'
+        
+        # DANGER: Obstacle très proche au centre -> ROTATION
+        if danger == "STOP":
+            self.danger_count += 1
+            self.current_state = "DANGER"
+            
+            # Déterminer le côté le plus sûr pour la rotation
+            left_clear = True
+            right_clear = True
+            
+            for o in obstacles:
+                if o['pos'] == "G" and o['dist'] > 0.3:
+                    left_clear = False
+                if o['pos'] == "D" and o['dist'] > 0.3:
+                    right_clear = False
+            
+            # Choisir direction de rotation
+            if left_clear and not right_clear:
+                self.rotation_direction = "LEFT"
+            elif right_clear and not left_clear:
+                self.rotation_direction = "RIGHT"
+            elif self.rotation_direction is None:
+                # Par défaut, tourner à gauche
+                self.rotation_direction = "LEFT"
+            
+            # Démarrer rotation (8 pas = environ 90°)
+            self.rotation_steps = 8
+            logger.info(f"🔄 DANGER! Rotation vers la {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'}")
+            
+            if self.rotation_direction == "LEFT":
+                return 'pivot_left'
+            else:
+                return 'pivot_right'
+        
+        # Reset compteur danger si pas en STOP
+        self.danger_count = 0
         
         # Obstacle au centre (moins proche) -> essayer de contourner
         if position == "CENTER":
@@ -633,12 +874,20 @@ class AutonomousNavigator:
             else:
                 return 'slide_right'
         
-        # Obstacles des deux côtés -> alterner la direction
+        # Obstacles des deux côtés -> rotation vers le côté le moins encombré
         if position == "BOTH":
             self.current_state = "BLOCKED"
             self.escape_steps += 1
-            # Alterner la direction tous les 5 pas
-            if self.escape_steps % 10 < 5:
+            
+            # Après plusieurs tentatives, essayer une rotation
+            if self.escape_steps > 6:
+                self.escape_steps = 0
+                self.rotation_steps = 4  # Petite rotation
+                self.rotation_direction = "LEFT"
+                return 'pivot_left'
+            
+            # Alterner la direction
+            if self.escape_steps % 6 < 3:
                 return 'slide_left'
             else:
                 return 'slide_right'
@@ -649,7 +898,6 @@ class AutonomousNavigator:
             self.escape_direction = "RIGHT"
             self.escape_steps += 1
             if self.escape_steps > self.max_escape_steps:
-                # Trop de translations, essayer d'avancer
                 self.escape_steps = 0
                 return 'forward'
             return 'slide_right'
@@ -680,15 +928,26 @@ class AutonomousNavigator:
         if key is None:
             return False
         
-        # Espace = Pause/Reprendre
+        # Espace = Démarrer/Pause/Reprendre
         if key == ' ':
-            self.paused = not self.paused
-            if self.paused:
-                self.motors.stop()
-                logger.info("⏸️  PAUSE - Appuyez sur ESPACE pour reprendre")
+            if not self.started:
+                # Premier démarrage
+                self.started = True
+                self.paused = False
+                self.start_time = time.time()
+                logger.info("=" * 50)
+                logger.info("🚀 NAVIGATION DÉMARRÉE !")
+                logger.info("   ESPACE = Pause/Reprendre")
+                logger.info("=" * 50)
             else:
-                logger.info("▶️  REPRISE de la navigation")
-                self.step_index = 0
+                # Pause/Reprendre
+                self.paused = not self.paused
+                if self.paused:
+                    self.motors.stop()
+                    logger.info("⏸️  PAUSE - Appuyez sur ESPACE pour reprendre")
+                else:
+                    logger.info("▶️  REPRISE de la navigation")
+                    self.step_index = 0
             return False
         
         # Ctrl+C ou 'q' = Quitter
@@ -705,8 +964,8 @@ class AutonomousNavigator:
         last_log_time = time.time()
         
         logger.info("=" * 50)
-        logger.info("🤖 NAVIGATION AUTONOME DÉMARRÉE")
-        logger.info("   ESPACE = Pause/Reprendre")
+        logger.info("🤖 NAVIGATION AUTONOME PRÊTE")
+        logger.info("   ▶️  Appuyez sur ESPACE pour DÉMARRER")
         logger.info("   Ctrl+C ou Q = Quitter")
         logger.info("=" * 50)
         
@@ -716,13 +975,43 @@ class AutonomousNavigator:
                 if self._handle_keyboard():
                     break
                 
-                # Si en pause, juste attendre
+                # Capturer frame (même en pause pour le streaming)
+                frame = self.camera.get_frame()
+                
+                # Si en pause ou pas encore démarré
                 if self.paused:
+                    if frame is not None:
+                        # Afficher quand même le flux avec message d'attente
+                        display_frame = frame.copy()
+                        h, w = display_frame.shape[:2]
+                        
+                        if not self.started:
+                            # Message d'attente de démarrage
+                            msg = "Appuyez sur ESPACE pour demarrer"
+                            cv2.putText(display_frame, msg, (w//2 - 180, h//2), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                            status = "ATTENTE"
+                        else:
+                            # Message de pause
+                            msg = "PAUSE - ESPACE pour reprendre"
+                            cv2.putText(display_frame, msg, (w//2 - 160, h//2), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                            status = "PAUSE"
+                        
+                        # Mettre à jour le stream HTTP
+                        with StreamHandler.shared_lock:
+                            StreamHandler.shared_frame = display_frame
+                            StreamHandler.shared_stats = {
+                                'fps': 0,
+                                'obstacles': 0,
+                                'danger': status,
+                                'action': 'stop',
+                                'state': status,
+                                'paused': True
+                            }
+                    
                     time.sleep(0.1)
                     continue
-                
-                # Capturer frame
-                frame = self.camera.get_frame()
                 
                 if frame is None:
                     time.sleep(0.05)
@@ -732,8 +1021,40 @@ class AutonomousNavigator:
                 obstacles, danger, position = self.detector.detect(frame)
                 self.detection_count += 1
                 
-                # Décider action
-                action = self._decide_action(danger, position)
+                # Décider action (passer les obstacles pour analyse)
+                action = self._decide_action(danger, position, obstacles)
+                
+                # Dessiner les obstacles sur la frame pour le streaming
+                display_frame = self.detector.draw(frame.copy(), obstacles, danger, position)
+                
+                # Ajouter infos sur la frame
+                elapsed = time.time() - self.start_time
+                det_fps = self.detection_count / elapsed if elapsed > 0 else 0
+                action_text = {
+                    'forward': 'AVANCE', 
+                    'slide_left': 'GAUCHE', 
+                    'slide_right': 'DROITE',
+                    'pivot_left': 'ROT.G',
+                    'pivot_right': 'ROT.D',
+                    'stop': 'STOP'
+                }.get(action, action)
+                status_text = f"{action_text} | {det_fps:.1f} det/s"
+                if self.paused:
+                    status_text = "PAUSE | " + status_text
+                cv2.putText(display_frame, status_text, (5, 15), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                
+                # Mettre à jour le stream HTTP
+                with StreamHandler.shared_lock:
+                    StreamHandler.shared_frame = display_frame
+                    StreamHandler.shared_stats = {
+                        'fps': det_fps,
+                        'obstacles': len(obstacles),
+                        'danger': danger,
+                        'action': action,
+                        'state': self.current_state,
+                        'paused': self.paused
+                    }
                 
                 # Exécuter action
                 if action == 'forward':
@@ -742,6 +1063,10 @@ class AutonomousNavigator:
                     self.motors.slide_left()
                 elif action == 'slide_right':
                     self.motors.slide_right()
+                elif action == 'pivot_left':
+                    self.motors.pivot_left()
+                elif action == 'pivot_right':
+                    self.motors.pivot_right()
                 else:
                     self.motors.stop()
                 
@@ -754,6 +1079,8 @@ class AutonomousNavigator:
                         'forward': '⬆️  AVANCE',
                         'slide_left': '⬅️  GAUCHE',
                         'slide_right': '➡️  DROITE',
+                        'pivot_left': '↩️  ROT.G',
+                        'pivot_right': '↪️  ROT.D',
                         'stop': '🛑 STOP'
                     }
                     
@@ -790,6 +1117,10 @@ class AutonomousNavigator:
         # Arrêter la caméra
         self.camera.stop()
         
+        # Arrêter le serveur HTTP
+        if self.http_server:
+            self.http_server.shutdown()
+        
         # Restaurer le terminal
         self.keyboard.restore()
         
@@ -819,15 +1150,20 @@ def main():
     print("   - Obstacles des 2 côtés → Alternance G/D")
     print()
     print("   Contrôles:")
-    print("   - ESPACE   : Pause / Reprendre")
+    print("   - ESPACE   : DÉMARRER / Pause / Reprendre")
     print("   - Ctrl+C   : Quitter")
     print("   - Q        : Quitter")
     print()
+    print("   📹 Streaming vidéo:")
+    print(f"   - Port: {HTTP_PORT}")
+    print(f"   - SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
+    print(f"   - Puis: http://localhost:{HTTP_PORT}")
+    print()
     print("=" * 60)
     print()
-    print("   Démarrage dans 3 secondes...")
+    print("   ⏳ Initialisation...")
     
-    time.sleep(3)
+    time.sleep(2)
     
     navigator = None
     try:
