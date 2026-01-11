@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 Hexapode - Navigation Autonome avec Évitement d'Obstacles
 Avance automatiquement et esquive les obstacles détectés
