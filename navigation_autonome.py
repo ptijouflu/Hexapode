@@ -435,6 +435,7 @@ class ObstacleDetector:
         """
         Retourne: obstacles, danger_level, obstacle_position
         obstacle_position: 'LEFT', 'RIGHT', 'CENTER', 'BOTH', None
+        Optimisé pour détecter les GROS obstacles (cylindres, boîtes)
         """
         if frame is None:
             return [], "INIT", None
@@ -444,20 +445,43 @@ class ObstacleDetector:
         y2 = int(h * self.roi_bottom)
         roi = frame[y1:y2, :]
         
+        # Conversion en différents espaces couleur pour meilleure détection
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
-        # Seuillage adaptatif (détecte objets plus sombres/clairs que le sol)
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 21, 5
-        )
+        # Extraire le canal de saturation (les objets colorés ressortent)
+        saturation = hsv[:, :, 1]
         
-        # Détection de contours Canny avec seuils ajustés
-        edges = cv2.Canny(blurred, self.edge_thresh, self.edge_thresh * 2)
-        combined = cv2.bitwise_or(thresh, edges)
-        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, self._kernel)
-        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, self._kernel)
+        # Flou pour réduire le bruit
+        blurred_gray = cv2.GaussianBlur(gray, (9, 9), 0)
+        blurred_sat = cv2.GaussianBlur(saturation, (9, 9), 0)
+        
+        # Méthode 1: Détection par différence de couleur/saturation
+        # Les objets ont souvent une saturation différente du sol
+        _, sat_thresh = cv2.threshold(blurred_sat, 70, 255, cv2.THRESH_BINARY)
+        
+        # Méthode 2: Détection par contraste local (Laplacien)
+        laplacian = cv2.Laplacian(blurred_gray, cv2.CV_64F)
+        laplacian = np.uint8(np.absolute(laplacian))
+        _, lap_thresh = cv2.threshold(laplacian, 25, 255, cv2.THRESH_BINARY)
+        
+        # Méthode 3: Détection de contours Canny
+        edges = cv2.Canny(blurred_gray, self.edge_thresh, self.edge_thresh * 2)
+        
+        # Combiner les méthodes
+        combined = cv2.bitwise_or(sat_thresh, lap_thresh)
+        combined = cv2.bitwise_or(combined, edges)
+        
+        # Morphologie réduite pour moins de faux positifs
+        kernel_large = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        kernel_medium = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        
+        # Fermer les trous dans les gros objets
+        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel_large)
+        # Supprimer les petits artefacts
+        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel_medium)
+        # Dilater pour connecter les parties d'un même objet (réduit)
+        combined = cv2.dilate(combined, kernel_medium, iterations=1)
         
         contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
@@ -475,27 +499,38 @@ class ObstacleDetector:
                 continue
             
             x, y, bw, bh = cv2.boundingRect(cnt)
+            
+            # Filtrer les formes trop plates (lignes horizontales)
+            aspect_ratio = bw / max(bh, 1)
+            if aspect_ratio > 8:  # Ignorer les formes très larges et plates
+                continue
+            
+            # Les vrais obstacles ont une certaine hauteur
+            if bh < 35:
+                continue
+            
             y_global = y + y1
             cx = x + bw // 2
             
-            dist = (y_global - y1) / (y2 - y1)
+            # Distance relative dans la ROI (0=haut/loin, 1=bas/proche)
+            dist = (y + bh) / (y2 - y1)  # Utiliser le bas de l'objet pour la distance
             
             if cx < third_w:
                 pos = "G"
-                if dist > 0.35:  # Seuil ajusté pour détecter plus tôt
+                if dist > 0.45:  # Obstacle gauche très proche seulement
                     has_left = True
             elif cx > 2 * third_w:
                 pos = "D"
-                if dist > 0.35:  # Seuil ajusté pour détecter plus tôt
+                if dist > 0.45:  # Obstacle droite très proche seulement
                     has_right = True
             else:
                 pos = "C"
-                if dist > 0.45:  # Seuil ajusté
+                if dist > 0.50:  # Obstacle centre
                     has_center = True
                     closest_center_dist = max(closest_center_dist, dist)
             
-            # Taille (seuils ajustés pour image large 640x240)
-            size = "S" if area < 1500 else ("M" if area < 6000 else "L")
+            # Taille basée sur la surface (ajustée pour gros obstacles)
+            size = "S" if area < 5000 else ("M" if area < 15000 else "L")
             
             obstacles.append({
                 'bbox': (x, y_global, bw, bh),
@@ -505,7 +540,7 @@ class ObstacleDetector:
             })
         
         # Déterminer le niveau de danger et la position
-        if has_center and closest_center_dist > 0.55:  # Seuil ajusté
+        if has_center and closest_center_dist > 0.65:  # Obstacle centre TRES proche seulement
             danger = "STOP"
             position = "CENTER"
         elif has_center:
@@ -753,10 +788,10 @@ class AutonomousNavigator:
         # Composants - Format large pour meilleure vision latérale
         self.camera = FastCamera(width=640, height=240, fps=10)
         self.detector = ObstacleDetector(
-            min_area=400,      # Surface min pour détecter un obstacle
-            roi_top=0.30,      # Zone de détection commence à 30% du haut
+            min_area=4000,     # Surface min très élevée pour détecter uniquement les GROS obstacles
+            roi_top=0.25,      # Zone de détection commence à 25% du haut
             roi_bottom=0.95,   # Zone de détection finit à 95% du haut
-            edge_thresh=50     # Seuil Canny
+            edge_thresh=60     # Seuil Canny plus haut = moins sensible
         )
         self.motors = MotorController()
         
@@ -774,9 +809,7 @@ class AutonomousNavigator:
         
         # Gestion rotation en cas de danger
         self.danger_count = 0  # Compteur de détections STOP consécutives
-        self.rotation_steps = 0  # Nombre de pas de rotation effectués
         self.rotation_direction = None  # Direction de rotation choisie
-        self.post_rotation_forward = 0  # Pas d'avance après rotation
         
         # Stats
         self.detection_count = 0
@@ -802,33 +835,12 @@ class AutonomousNavigator:
         Machine à états pour décider de l'action
         Retourne: 'forward', 'slide_left', 'slide_right', 'pivot_left', 'pivot_right', 'stop'
         
-        Nouvelle logique:
-        - STOP (danger proche) -> Rotation vers le côté le plus sûr
-        - Après rotation -> Avancer quelques pas pour vérifier
+        Logique:
+        - Analyse à chaque itération
+        - Fait UN SEUL pas de rotation si STOP, puis réévalue
         """
         
-        # Si on est en train de faire des pas d'avance après rotation
-        if self.post_rotation_forward > 0:
-            self.post_rotation_forward -= 1
-            self.current_state = "POST_ROTATION"
-            if self.post_rotation_forward == 0:
-                self.rotation_direction = None
-            return 'forward'
-        
-        # Si on est en train de tourner (rotation en cours)
-        if self.rotation_steps > 0:
-            self.rotation_steps -= 1
-            self.current_state = "ROTATING"
-            if self.rotation_steps == 0:
-                # Fin de rotation, avancer quelques pas
-                self.post_rotation_forward = 5  # Avancer 5 pas après rotation
-                logger.info("🚀 Rotation terminée, reprise de l'avance")
-            if self.rotation_direction == "LEFT":
-                return 'pivot_left'
-            else:
-                return 'pivot_right'
-        
-        # DANGER: Obstacle très proche au centre -> ROTATION
+        # DANGER: Obstacle très proche au centre -> ROTATION (1 pas à la fois, puis réévaluation)
         if danger == "STOP":
             self.danger_count += 1
             self.current_state = "DANGER"
@@ -852,9 +864,8 @@ class AutonomousNavigator:
                 # Par défaut, tourner à gauche
                 self.rotation_direction = "LEFT"
             
-            # Démarrer rotation (8 pas = environ 90°)
-            self.rotation_steps = 8
-            logger.info(f"🔄 DANGER! Rotation vers la {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'}")
+            # Faire UN SEUL pas de rotation, puis réévaluer à la prochaine itération
+            logger.info(f"🔄 DANGER! Rotation {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'} (1 pas)")
             
             if self.rotation_direction == "LEFT":
                 return 'pivot_left'
@@ -874,19 +885,19 @@ class AutonomousNavigator:
             else:
                 return 'slide_right'
         
-        # Obstacles des deux côtés -> rotation vers le côté le moins encombré
+        # Obstacles des deux côtés -> essayer de glisser, puis rotation si bloqué
         if position == "BOTH":
             self.current_state = "BLOCKED"
             self.escape_steps += 1
             
-            # Après plusieurs tentatives, essayer une rotation
+            # Après plusieurs tentatives de glissement, faire UN pas de rotation
             if self.escape_steps > 6:
                 self.escape_steps = 0
-                self.rotation_steps = 4  # Petite rotation
-                self.rotation_direction = "LEFT"
-                return 'pivot_left'
+                if self.rotation_direction is None:
+                    self.rotation_direction = "LEFT"
+                return 'pivot_left' if self.rotation_direction == "LEFT" else 'pivot_right'
             
-            # Alterner la direction
+            # Alterner la direction de glissement
             if self.escape_steps % 6 < 3:
                 return 'slide_left'
             else:
