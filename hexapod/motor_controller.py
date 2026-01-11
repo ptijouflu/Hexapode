@@ -11,7 +11,7 @@ try:
     DYNAMIXEL_AVAILABLE = True
 except ImportError:
     DYNAMIXEL_AVAILABLE = False
-    print("⚠ dynamixel_sdk non disponible - Mode simulation")
+    print(" dynamixel_sdk non disponible - Mode simulation")
 
 from .constants import (
     DEVICENAME, BAUDRATE, PROTOCOL_VERSION, DXL_IDS,
@@ -79,7 +79,7 @@ class MotorController:
                 )
             
             self.connected = True
-            logger.info("✓ Moteurs connectés")
+            logger.info("[OK] Moteurs connectés")
             
             # Position initiale
             self._write_positions(INIT_POSE)
@@ -118,7 +118,7 @@ class MotorController:
             self.current_action = 'stop'
             self.step_index = 0
             self._write_positions(INIT_POSE)
-            logger.info("🛑 STOP")
+            logger.info("STOP STOP")
     
     def forward(self):
         """Effectue un pas en avant"""

@@ -62,7 +62,7 @@ class FastCamera:
             
             self.capture_thread = threading.Thread(target=self._read_mjpeg, daemon=True)
             self.capture_thread.start()
-            logger.info("✓ Camera (libcamera-vid)")
+            logger.info("[OK] Camera (libcamera-vid)")
             
         except Exception as e:
             logger.warning(f"libcamera-vid échoué: {e}, fallback rpicam-jpeg")

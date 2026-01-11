@@ -1,0 +1,9 @@
+# Hexapode - Dépendances Python
+# Installation: pip install -r requirements.txt
+
+# Contrôle des moteurs Dynamixel
+dynamixel-sdk>=3.7.0
+
+# Vision par ordinateur
+opencv-python>=4.5.0
+numpy>=1.20.0

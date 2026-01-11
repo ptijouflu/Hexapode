@@ -96,5 +96,5 @@ def start_stream_server(camera, detector=None, port=8080):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     
-    logger.info(f"✓ Streaming sur http://0.0.0.0:{port}/")
+    logger.info(f"[OK] Streaming sur http://0.0.0.0:{port}/")
     return server

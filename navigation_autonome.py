@@ -87,8 +87,8 @@ h1{color:#0f8;margin:10px 0}
 function u(){fetch('/status').then(r=>r.json()).then(d=>{
 let s=document.getElementById('s');
 let a=document.getElementById('action');
-let actions={'forward':'⬆️ AVANCE','slide_left':'⬅️ GAUCHE','slide_right':'➡️ DROITE','pivot_left':'↩️ ROT.GAUCHE','pivot_right':'↪️ ROT.DROITE','stop':'🛑 STOP'};
-a.innerHTML=d.paused?'⏸️ PAUSE':actions[d.action]||d.action;
+let actions={'forward':' AVANCE','slide_left':' GAUCHE','slide_right':' DROITE','pivot_left':' ROT.GAUCHE','pivot_right':' ROT.DROITE','stop':' STOP'};
+a.innerHTML=d.paused?' PAUSE':actions[d.action]||d.action;
 a.className=d.paused?'paused':'';
 s.innerHTML='État: '+d.state+' | Danger: '+d.danger+' | Obs: '+d.obstacles+' | '+d.fps.toFixed(1)+' det/s';
 s.style.background=d.danger=='STOP'?'#f00':d.danger=='WARN'?'#f80':d.danger=='OBS'?'#ff0':'#0f0';
@@ -98,7 +98,7 @@ if(d.paused)s.style.background='#f80';
 setInterval(u,200);
 </script>
 </head><body>
-<h1>🤖 Hexapode - Navigation Autonome</h1>
+<h1> Hexapode - Navigation Autonome</h1>
 <div id="action">Chargement...</div>
 <img id="v" src="/stream">
 <div id="s">Connexion...</div>
@@ -214,7 +214,7 @@ class AutonomousNavigator:
         self.start_time = None
         
         time.sleep(1)  # Attendre initialisation camera
-        logger.info("✓ Navigateur autonome initialisé")
+        logger.info("[OK] Navigateur autonome initialisé")
     
     def _start_http_server(self):
         """Démarre le serveur HTTP pour le streaming"""
@@ -222,7 +222,7 @@ class AutonomousNavigator:
             self.http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), NavigationStreamHandler)
             self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
             self.http_thread.start()
-            logger.info(f"✓ Serveur HTTP sur port {HTTP_PORT}")
+            logger.info(f"[OK] Serveur HTTP sur port {HTTP_PORT}")
             logger.info(f"  SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
             logger.info(f"  Puis: http://localhost:{HTTP_PORT}")
         except Exception as e:
@@ -257,7 +257,7 @@ class AutonomousNavigator:
             elif self.rotation_direction is None:
                 self.rotation_direction = "LEFT"
             
-            logger.info(f"🔄 DANGER! Rotation {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'} (1 pas)")
+            logger.info(f" DANGER! Rotation {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'} (1 pas)")
             
             if self.rotation_direction == "LEFT":
                 return 'pivot_left'
@@ -333,16 +333,16 @@ class AutonomousNavigator:
                 self.paused = False
                 self.start_time = time.time()
                 logger.info("=" * 50)
-                logger.info("🚀 NAVIGATION DÉMARRÉE !")
+                logger.info(" NAVIGATION DÉMARRÉE !")
                 logger.info("   ESPACE = Pause/Reprendre")
                 logger.info("=" * 50)
             else:
                 self.paused = not self.paused
                 if self.paused:
                     self.motors.stop()
-                    logger.info("⏸️  PAUSE - Appuyez sur ESPACE pour reprendre")
+                    logger.info("  PAUSE - Appuyez sur ESPACE pour reprendre")
                 else:
-                    logger.info("▶️  REPRISE de la navigation")
+                    logger.info("  REPRISE de la navigation")
             return False
         
         # Ctrl+C ou 'q' = Quitter
@@ -359,8 +359,8 @@ class AutonomousNavigator:
         last_log_time = time.time()
         
         logger.info("=" * 50)
-        logger.info("🤖 NAVIGATION AUTONOME PRÊTE")
-        logger.info("   ▶️  Appuyez sur ESPACE pour DÉMARRER")
+        logger.info(" NAVIGATION AUTONOME PRÊTE")
+        logger.info("     Appuyez sur ESPACE pour DÉMARRER")
         logger.info("   Ctrl+C ou Q = Quitter")
         logger.info("=" * 50)
         
@@ -462,12 +462,12 @@ class AutonomousNavigator:
                 # Log toutes les secondes
                 if time.time() - last_log_time >= 1.0:
                     action_symbols = {
-                        'forward': '⬆️  AVANCE',
-                        'slide_left': '⬅️  GAUCHE',
-                        'slide_right': '➡️  DROITE',
-                        'pivot_left': '↩️  ROT.G',
-                        'pivot_right': '↪️  ROT.D',
-                        'stop': '🛑 STOP'
+                        'forward': '  AVANCE',
+                        'slide_left': '  GAUCHE',
+                        'slide_right': '  DROITE',
+                        'pivot_left': '  ROT.G',
+                        'pivot_right': '  ROT.D',
+                        'stop': ' STOP'
                     }
                     
                     obs_info = ""
@@ -484,7 +484,7 @@ class AutonomousNavigator:
                 time.sleep(self.motors.get_delay())
                 
         except KeyboardInterrupt:
-            logger.info("\n⚠️ Ctrl+C détecté - Arrêt...")
+            logger.info("\n Ctrl+C détecté - Arrêt...")
         finally:
             self.stop()
     
@@ -503,8 +503,8 @@ class AutonomousNavigator:
         
         self.keyboard.restore()
         
-        logger.info("✓ Navigation arrêtée proprement")
-        logger.info("Au revoir! 👋")
+        logger.info("[OK] Navigation arrêtée proprement")
+        logger.info("Au revoir! ")
 
 
 # ============================================================================
@@ -516,7 +516,7 @@ def main():
     
     print()
     print("=" * 60)
-    print("   🤖 HEXAPODE - NAVIGATION AUTONOME")
+    print("    HEXAPODE - NAVIGATION AUTONOME")
     print("   Format large (640x240) pour vision latérale")
     print("=" * 60)
     print()
@@ -532,14 +532,14 @@ def main():
     print("   - Ctrl+C   : Quitter")
     print("   - Q        : Quitter")
     print()
-    print("   📹 Streaming vidéo:")
+    print("    Streaming vidéo:")
     print(f"   - Port: {HTTP_PORT}")
     print(f"   - SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
     print(f"   - Puis: http://localhost:{HTTP_PORT}")
     print()
     print("=" * 60)
     print()
-    print("   ⏳ Initialisation...")
+    print("    Initialisation...")
     
     time.sleep(2)
     
