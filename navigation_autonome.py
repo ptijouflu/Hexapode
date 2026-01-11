@@ -1,38 +1,29 @@
-    #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Hexapode - Navigation Autonome avec Évitement d'Obstacles
 Avance automatiquement et esquive les obstacles détectés
 Format large (640x240) pour meilleure vision latérale
+
+Version refactorisée utilisant les modules partagés hexapod/
 """
 
-import os
-import sys
 import cv2
-import numpy as np
-import threading
 import time
-import logging
-import subprocess
-import tempfile
 import signal
-import select
-import termios
-import tty
-from collections import deque
-from datetime import datetime
+import logging
+import threading
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-import json
 
-# Ajouter le chemin parent pour importer les modules
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-try:
-    from dynamixel_sdk import *
-    DYNAMIXEL_AVAILABLE = True
-except ImportError:
-    DYNAMIXEL_AVAILABLE = False
-    print("⚠ dynamixel_sdk non disponible - Mode simulation")
+# Import des modules partagés
+from hexapod import (
+    MotorController,
+    KeyboardHandler,
+    ObstacleDetector,
+    FastCamera,
+    HTTP_PORT
+)
 
 # Configuration du logging
 logging.basicConfig(
@@ -41,126 +32,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# CONFIGURATION MOTEURS (depuis deplacement.py)
-# ============================================================================
-
-DEVICENAME = '/dev/ttyUSB0'
-BAUDRATE = 1000000
-PROTOCOL_VERSION = 2.0
-DXL_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-
-ADDR_TORQUE_ENABLE = 64
-ADDR_GOAL_POSITION = 116
-LEN_GOAL_POSITION = 4
-
-# Facteurs d'amplitude
-FACTOR_WALK = 2
-FACTOR_SLIDE = 1.2
-FACTOR_TURN = 1.0
-
-# Configuration serveur HTTP
-HTTP_PORT = 8080
-
-# Position initiale
-INIT_POSE = [30, -30, -30, -30, 15, -30, -15, -30, -30, -30, 30, -30]
-
-# Séquences de mouvement
-SEQ_MOVE_F = [
-    [51.54, -40, -40, -10, 10, -10, -10, -10, -50, -10, 61.54, -20],
-    [43.85, -20, -43.85, -10, 13.85, -10, -13.85, -10, -46.15, -10, 69.23, -30],
-    [47.69, -10, -47.69, -10, 17.69, -10, -17.69, -10, -53.85, -20, 76.92, -40],
-    [51.54, -10, -51.54, -10, 21.54, -10, -21.54, -10, -61.54, -30, 84.62, -20],
-    [55.38, -10, -55.38, -10, 25.38, -10, -13.85, -20, -69.23, -40, 80.77, -10],
-    [59.23, -10, -59.23, -10, 29.23, -10, -6.15, -30, -76.92, -20, 76.92, -10],
-    [63.08, -10, -63.08, -10, 21.54, -20, 1.54, -40, -73.08, -10, 73.08, -10],
-    [66.92, -10, -66.92, -10, 13.85, -30, 9.23, -20, -69.23, -10, 69.23, -10],
-    [70.77, -10, -59.23, -20, 6.15, -40, 5.38, -10, -65.38, -10, 65.38, -10],
-    [74.62, -10, -51.54, -30, -1.54, -20, 1.54, -10, -61.54, -10, 61.54, -10],
-    [66.92, -20, -43.85, -40, 2.31, -10, -2.31, -10, -57.69, -10, 57.69, -10],
-    [59.23, -30, -36.15, -20, 6.15, -10, -6.15, -10, -53.85, -10, 53.85, -10]
-]
-
-SEQ_SLIDE_R = [
-    [0, -35, -60, -25, 8, -60, -8, -50, 0, -35, 40, -25],
-    [-10, -20, -50, -50, 8, -20, -8, -30, 10, -20, -10, -50],
-    [-10, -40, -50, -20, 8, -20, -8, -30, 10, -40, -10, -20],
-    [40, -40, -50, -20, 8, -20, -8, -30, -40, -40, -10, -20],
-    [60, -20, -60, -30, 8, -50, -8, -50, -60, -20, -10, -30]
-]
-
-SEQ_SLIDE_L = [
-    [60, -25, 0, -35, 8, -50, -8, -60, -40, -25, 0, -35],
-    [50, -50, 10, -20, 8, -30, -8, -20, 10, -50, -10, -20],
-    [50, -20, 10, -40, 8, -30, -8, -20, 10, -20, -10, -40],
-    [50, -20, -40, -40, 8, -30, -8, -20, 10, -20, 40, -40],
-    [60, -30, -60, -20, 8, -50, -8, -50, 10, -30, 60, -20]
-]
-
-# Rotation Gauche (Pivot L)
-SEQ_PIVOT_L = [
-    [55, -20, -55, -40, -7, -40, 7, -20, -35, -20, 35, -40],
-    [70, -10, -70, -10, -22, -10, 22, -10, -20, -10, 20, -10],
-    [55.29, -40, -55.29, -20, -7.29, -20, 7.29, -40, -34.71, -40, 34.71, -20],
-    [40, -10, -40, -10, 8, -10, -8, -10, -50, -10, 50, -10]
-]
-
-# Rotation Droite (Pivot R)
-SEQ_PIVOT_R = [
-    [25, -20, -25, -40, 23, -40, -23, -20, -65, -20, 65, -40],
-    [10, -10, -10, -10, 38, -10, -38, -10, -80, -10, 80, -10],
-    [25.29, -40, -25.29, -20, 22.71, -20, -22.71, -40, -64.71, -40, 64.71, -20],
-    [40, -10, -40, -10, 8, -10, -8, -10, -50, -10, 50, -10]
-]
-
-
-def deg2dxl(deg):
-    return int(2048 + (deg * (4095.0 / 360.0)))
-
-
-def amplify_sequence(sequence, factor):
-    new_sequence = []
-    num_motors = len(sequence[0])
-    means = [sum(step[i] for step in sequence) / len(sequence) for i in range(num_motors)]
-    for step in sequence:
-        new_step = []
-        for i in range(num_motors):
-            delta = step[i] - means[i]
-            new_val = means[i] + (delta * factor)
-            new_step.append(new_val)
-        new_sequence.append(new_step)
-    return new_sequence
-
 
 # ============================================================================
-# GESTION CLAVIER
-# ============================================================================
-
-class KeyboardHandler:
-    """Gestion du clavier en mode non-bloquant"""
-    
-    def __init__(self):
-        self.fd = sys.stdin.fileno()
-        self.old_settings = termios.tcgetattr(self.fd)
-        self._setup()
-    
-    def _setup(self):
-        """Configure le terminal en mode raw"""
-        tty.setcbreak(self.fd)
-    
-    def get_key(self):
-        """Retourne la touche pressée ou None"""
-        if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
-            return sys.stdin.read(1)
-        return None
-    
-    def restore(self):
-        """Restaure les paramètres du terminal"""
-        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
-
-
-# ============================================================================
-# SERVEUR HTTP STREAMING
+# SERVEUR HTTP STREAMING (spécifique à la navigation avec interface web)
 # ============================================================================
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -169,8 +43,8 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
 
 
-class StreamHandler(BaseHTTPRequestHandler):
-    """Handler HTTP pour streaming vidéo en temps réel"""
+class NavigationStreamHandler(BaseHTTPRequestHandler):
+    """Handler HTTP pour streaming vidéo en temps réel avec interface de navigation"""
     
     shared_frame = None
     shared_lock = threading.Lock()
@@ -285,477 +159,6 @@ Ctrl+C ou Q = Quitter
 
 
 # ============================================================================
-# CAMERA CAPTURE (optimisée)
-# ============================================================================
-
-class FastCamera:
-    """
-    Capture caméra optimisée
-    Format large (640x240) pour meilleure vision latérale
-    """
-    
-    def __init__(self, width=640, height=240, fps=10):
-        self.width = width
-        self.height = height
-        self.fps = fps
-        self.current_frame = None
-        self.frame_lock = threading.Lock()
-        self.running = False
-        self.process = None
-        
-        logger.info(f"Init camera {width}x{height}@{fps}fps")
-        self._start()
-    
-    def _start(self):
-        self.running = True
-        
-        # Essayer libcamera-vid d'abord
-        try:
-            cmd = [
-                'libcamera-vid',
-                '--width', str(self.width),
-                '--height', str(self.height),
-                '--framerate', str(self.fps),
-                '--timeout', '0',
-                '--codec', 'mjpeg',
-                '--quality', '60',
-                '--nopreview',
-                '-o', '-'
-            ]
-            
-            self.process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**6
-            )
-            
-            self.capture_thread = threading.Thread(target=self._read_mjpeg, daemon=True)
-            self.capture_thread.start()
-            logger.info("✓ Camera (libcamera-vid)")
-            
-        except Exception as e:
-            logger.warning(f"libcamera-vid échoué: {e}, fallback rpicam-jpeg")
-            self._start_fallback()
-    
-    def _start_fallback(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.capture_thread.start()
-    
-    def _read_mjpeg(self):
-        buffer = b''
-        jpeg_start = b'\xff\xd8'
-        jpeg_end = b'\xff\xd9'
-        
-        try:
-            while self.running and self.process:
-                chunk = self.process.stdout.read(4096)
-                if not chunk:
-                    break
-                
-                buffer += chunk
-                
-                start_idx = buffer.find(jpeg_start)
-                if start_idx != -1:
-                    end_idx = buffer.find(jpeg_end, start_idx)
-                    if end_idx != -1:
-                        jpeg_data = buffer[start_idx:end_idx + 2]
-                        buffer = buffer[end_idx + 2:]
-                        
-                        frame = cv2.imdecode(
-                            np.frombuffer(jpeg_data, dtype=np.uint8),
-                            cv2.IMREAD_COLOR
-                        )
-                        
-                        if frame is not None:
-                            with self.frame_lock:
-                                self.current_frame = frame
-                
-                if len(buffer) > 500000:
-                    buffer = buffer[-100000:]
-        except:
-            pass
-        finally:
-            self.running = False
-    
-    def _capture_loop(self):
-        frame_delay = 1.0 / self.fps
-        frame_file = os.path.join(self.temp_dir, "frame.jpg")
-        
-        while self.running:
-            start = time.time()
-            try:
-                subprocess.run(
-                    ['rpicam-jpeg', '--width', str(self.width), '--height', str(self.height),
-                     '--timeout', '500', '--quality', '60', '--output', frame_file, '--nopreview'],
-                    capture_output=True, timeout=2
-                )
-                
-                if os.path.exists(frame_file):
-                    frame = cv2.imread(frame_file)
-                    if frame is not None:
-                        with self.frame_lock:
-                            self.current_frame = frame
-            except:
-                pass
-            
-            elapsed = time.time() - start
-            if elapsed < frame_delay:
-                time.sleep(frame_delay - elapsed)
-    
-    def get_frame(self):
-        with self.frame_lock:
-            return self.current_frame.copy() if self.current_frame is not None else None
-    
-    def stop(self):
-        self.running = False
-        if self.process:
-            self.process.terminate()
-        if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
-            import shutil
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-
-# ============================================================================
-# DÉTECTEUR D'OBSTACLES
-# ============================================================================
-
-class ObstacleDetector:
-    """
-    Détection d'obstacles optimisée
-    Format large pour meilleure vision latérale
-    """
-    
-    def __init__(self, min_area=400, roi_top=0.30, roi_bottom=0.95, edge_thresh=50):
-        self.min_area = min_area
-        self.roi_top = roi_top
-        self.roi_bottom = roi_bottom
-        self.edge_thresh = edge_thresh
-        self._kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        
-    def detect(self, frame):
-        """
-        Retourne: obstacles, danger_level, obstacle_position
-        obstacle_position: 'LEFT', 'RIGHT', 'CENTER', 'BOTH', None
-        Optimisé pour détecter les GROS obstacles (cylindres, boîtes)
-        """
-        if frame is None:
-            return [], "INIT", None
-        
-        h, w = frame.shape[:2]
-        y1 = int(h * self.roi_top)
-        y2 = int(h * self.roi_bottom)
-        roi = frame[y1:y2, :]
-        
-        # Conversion en différents espaces couleur pour meilleure détection
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        
-        # Extraire le canal de saturation (les objets colorés ressortent)
-        saturation = hsv[:, :, 1]
-        
-        # Flou pour réduire le bruit
-        blurred_gray = cv2.GaussianBlur(gray, (9, 9), 0)
-        blurred_sat = cv2.GaussianBlur(saturation, (9, 9), 0)
-        
-        # Méthode 1: Détection par différence de couleur/saturation
-        # Les objets ont souvent une saturation différente du sol
-        _, sat_thresh = cv2.threshold(blurred_sat, 70, 255, cv2.THRESH_BINARY)
-        
-        # Méthode 2: Détection par contraste local (Laplacien)
-        laplacian = cv2.Laplacian(blurred_gray, cv2.CV_64F)
-        laplacian = np.uint8(np.absolute(laplacian))
-        _, lap_thresh = cv2.threshold(laplacian, 25, 255, cv2.THRESH_BINARY)
-        
-        # Méthode 3: Détection de contours Canny
-        edges = cv2.Canny(blurred_gray, self.edge_thresh, self.edge_thresh * 2)
-        
-        # Combiner les méthodes
-        combined = cv2.bitwise_or(sat_thresh, lap_thresh)
-        combined = cv2.bitwise_or(combined, edges)
-        
-        # Morphologie réduite pour moins de faux positifs
-        kernel_large = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        kernel_medium = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        
-        # Fermer les trous dans les gros objets
-        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel_large)
-        # Supprimer les petits artefacts
-        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel_medium)
-        # Dilater pour connecter les parties d'un même objet (réduit)
-        combined = cv2.dilate(combined, kernel_medium, iterations=1)
-        
-        contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        obstacles = []
-        third_w = w // 3
-        
-        has_left = False
-        has_right = False
-        has_center = False
-        closest_center_dist = 0
-        
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < self.min_area:
-                continue
-            
-            x, y, bw, bh = cv2.boundingRect(cnt)
-            
-            # Filtrer les formes trop plates (lignes horizontales)
-            aspect_ratio = bw / max(bh, 1)
-            if aspect_ratio > 8:  # Ignorer les formes très larges et plates
-                continue
-            
-            # Les vrais obstacles ont une certaine hauteur
-            if bh < 35:
-                continue
-            
-            y_global = y + y1
-            cx = x + bw // 2
-            
-            # Distance relative dans la ROI (0=haut/loin, 1=bas/proche)
-            dist = (y + bh) / (y2 - y1)  # Utiliser le bas de l'objet pour la distance
-            
-            if cx < third_w:
-                pos = "G"
-                if dist > 0.45:  # Obstacle gauche très proche seulement
-                    has_left = True
-            elif cx > 2 * third_w:
-                pos = "D"
-                if dist > 0.45:  # Obstacle droite très proche seulement
-                    has_right = True
-            else:
-                pos = "C"
-                if dist > 0.50:  # Obstacle centre
-                    has_center = True
-                    closest_center_dist = max(closest_center_dist, dist)
-            
-            # Taille basée sur la surface (ajustée pour gros obstacles)
-            size = "S" if area < 5000 else ("M" if area < 15000 else "L")
-            
-            obstacles.append({
-                'bbox': (x, y_global, bw, bh),
-                'pos': pos,
-                'dist': dist,
-                'size': size
-            })
-        
-        # Déterminer le niveau de danger et la position
-        if has_center and closest_center_dist > 0.65:  # Obstacle centre TRES proche seulement
-            danger = "STOP"
-            position = "CENTER"
-        elif has_center:
-            danger = "WARN"
-            position = "CENTER"
-        elif has_left and has_right:
-            danger = "WARN"
-            position = "BOTH"
-        elif has_left:
-            danger = "OBS"
-            position = "LEFT"
-        elif has_right:
-            danger = "OBS"
-            position = "RIGHT"
-        else:
-            danger = "OK"
-            position = None
-        
-        return obstacles, danger, position
-    
-    def draw(self, frame, obstacles, danger, position):
-        """Dessine les obstacles sur la frame (format large)"""
-        if frame is None:
-            return frame
-        
-        h, w = frame.shape[:2]
-        y1 = int(h * self.roi_top)
-        y2 = int(h * self.roi_bottom)
-        
-        # Zone ROI
-        cv2.rectangle(frame, (0, y1), (w-1, y2), (60, 60, 60), 1)
-        
-        # Lignes de séparation des zones G/C/D
-        third_w = w // 3
-        cv2.line(frame, (third_w, y1), (third_w, y2), (40, 40, 40), 1)
-        cv2.line(frame, (2*third_w, y1), (2*third_w, y2), (40, 40, 40), 1)
-        
-        # Labels zones
-        cv2.putText(frame, "G", (third_w//2 - 5, y1 + 12), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80, 80, 80), 1)
-        cv2.putText(frame, "C", (w//2 - 5, y1 + 12), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80, 80, 80), 1)
-        cv2.putText(frame, "D", (2*third_w + third_w//2 - 5, y1 + 12), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (80, 80, 80), 1)
-        
-        # Couleur selon danger
-        colors = {
-            "OK": (0, 255, 0),
-            "OBS": (0, 220, 220),
-            "WARN": (0, 140, 255),
-            "STOP": (0, 0, 255)
-        }
-        color = colors.get(danger, (128, 128, 128))
-        
-        for o in obstacles:
-            x, y, bw, bh = o['bbox']
-            cv2.rectangle(frame, (x, y), (x+bw, y+bh), color, 2)
-            cv2.putText(frame, f"{o['size']}{o['pos']}", (x, y-3),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-        
-        # Indicateur danger (coin supérieur droit)
-        cv2.rectangle(frame, (w-60, 5), (w-5, 28), color, -1)
-        cv2.putText(frame, danger, (w-55, 22),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        
-        return frame
-
-
-# ============================================================================
-# CONTRÔLEUR MOTEURS
-# ============================================================================
-
-class MotorController:
-    """Contrôle des moteurs Dynamixel"""
-    
-    def __init__(self):
-        self.connected = False
-        self.portHandler = None
-        self.packetHandler = None
-        self.groupSyncWrite = None
-        
-        # Séquences pré-calculées
-        self.seq_forward = amplify_sequence(SEQ_MOVE_F, FACTOR_WALK)
-        self.seq_slide_left = amplify_sequence(SEQ_SLIDE_L, FACTOR_SLIDE)
-        self.seq_slide_right = amplify_sequence(SEQ_SLIDE_R, FACTOR_SLIDE)
-        self.seq_pivot_left = amplify_sequence(SEQ_PIVOT_L, FACTOR_TURN)
-        self.seq_pivot_right = amplify_sequence(SEQ_PIVOT_R, FACTOR_TURN)
-        
-        self.step_index = 0
-        self.current_action = 'stop'
-        
-        if DYNAMIXEL_AVAILABLE:
-            self._connect()
-    
-    def _connect(self):
-        try:
-            self.portHandler = PortHandler(DEVICENAME)
-            self.packetHandler = PacketHandler(PROTOCOL_VERSION)
-            
-            if not self.portHandler.openPort():
-                logger.error("Impossible d'ouvrir le port série")
-                return
-            
-            if not self.portHandler.setBaudRate(BAUDRATE):
-                logger.error("Impossible de configurer le baudrate")
-                return
-            
-            self.groupSyncWrite = GroupSyncWrite(
-                self.portHandler, self.packetHandler,
-                ADDR_GOAL_POSITION, LEN_GOAL_POSITION
-            )
-            
-            # Activer le torque
-            for mid in DXL_IDS:
-                self.packetHandler.write1ByteTxRx(
-                    self.portHandler, mid, ADDR_TORQUE_ENABLE, 1
-                )
-            
-            self.connected = True
-            logger.info("✓ Moteurs connectés")
-            
-            # Position initiale
-            self._write_positions(INIT_POSE)
-            time.sleep(0.5)
-            
-        except Exception as e:
-            logger.error(f"Erreur connexion moteurs: {e}")
-            self.connected = False
-    
-    def _write_positions(self, angles):
-        if not self.connected or self.groupSyncWrite is None:
-            return
-        
-        self.groupSyncWrite.clearParam()
-        
-        for i, motor_id in enumerate(DXL_IDS):
-            goal_pos = deg2dxl(angles[i])
-            goal_pos = max(0, min(4095, goal_pos))
-            param = [
-                DXL_LOBYTE(DXL_LOWORD(goal_pos)),
-                DXL_HIBYTE(DXL_LOWORD(goal_pos)),
-                DXL_LOBYTE(DXL_HIWORD(goal_pos)),
-                DXL_HIBYTE(DXL_HIWORD(goal_pos))
-            ]
-            self.groupSyncWrite.addParam(motor_id, param)
-        
-        self.groupSyncWrite.txPacket()
-    
-    def stop(self):
-        """Arrête le mouvement"""
-        if self.current_action != 'stop':
-            self.current_action = 'stop'
-            self.step_index = 0
-            self._write_positions(INIT_POSE)
-            logger.info("🛑 STOP")
-    
-    def forward(self):
-        """Avance d'un pas"""
-        self.current_action = 'forward'
-        self._write_positions(self.seq_forward[self.step_index])
-        self.step_index = (self.step_index + 1) % len(self.seq_forward)
-    
-    def slide_left(self):
-        """Translation gauche d'un pas"""
-        if self.current_action != 'slide_left':
-            self.step_index = 0
-        self.current_action = 'slide_left'
-        self._write_positions(self.seq_slide_left[self.step_index])
-        self.step_index = (self.step_index + 1) % len(self.seq_slide_left)
-    
-    def slide_right(self):
-        """Translation droite d'un pas"""
-        if self.current_action != 'slide_right':
-            self.step_index = 0
-        self.current_action = 'slide_right'
-        self._write_positions(self.seq_slide_right[self.step_index])
-        self.step_index = (self.step_index + 1) % len(self.seq_slide_right)
-    
-    def pivot_left(self):
-        """Rotation gauche d'un pas"""
-        if self.current_action != 'pivot_left':
-            self.step_index = 0
-        self.current_action = 'pivot_left'
-        self._write_positions(self.seq_pivot_left[self.step_index])
-        self.step_index = (self.step_index + 1) % len(self.seq_pivot_left)
-    
-    def pivot_right(self):
-        """Rotation droite d'un pas"""
-        if self.current_action != 'pivot_right':
-            self.step_index = 0
-        self.current_action = 'pivot_right'
-        self._write_positions(self.seq_pivot_right[self.step_index])
-        self.step_index = (self.step_index + 1) % len(self.seq_pivot_right)
-    
-    def get_delay(self):
-        """Retourne le délai selon l'action (ralenti pour meilleure détection)"""
-        if self.current_action in ['slide_left', 'slide_right']:
-            return 0.25  # Translation
-        elif self.current_action in ['pivot_left', 'pivot_right']:
-            return 0.20  # Rotation
-        return 0.15  # Marche avant
-    
-    def disconnect(self):
-        if self.connected:
-            self._write_positions(INIT_POSE)
-            time.sleep(0.3)
-            for mid in DXL_IDS:
-                self.packetHandler.write1ByteTxRx(
-                    self.portHandler, mid, ADDR_TORQUE_ENABLE, 0
-                )
-            self.portHandler.closePort()
-            logger.info("Moteurs déconnectés")
-
-
-# ============================================================================
 # NAVIGATEUR AUTONOME
 # ============================================================================
 
@@ -782,17 +185,12 @@ class AutonomousNavigator:
         self.started = False  # Premier démarrage pas encore fait
         self.quit_requested = False  # Demande de quitter
         
-        # Gestion clavier
+        # Gestion clavier (module partagé)
         self.keyboard = KeyboardHandler()
         
-        # Composants - Format large pour meilleure vision latérale
-        self.camera = FastCamera(width=640, height=240, fps=10)
-        self.detector = ObstacleDetector(
-            min_area=4000,     # Surface min très élevée pour détecter uniquement les GROS obstacles
-            roi_top=0.25,      # Zone de détection commence à 25% du haut
-            roi_bottom=0.95,   # Zone de détection finit à 95% du haut
-            edge_thresh=60     # Seuil Canny plus haut = moins sensible
-        )
+        # Composants (modules partagés)
+        self.camera = FastCamera()  # Utilise les constantes du module
+        self.detector = ObstacleDetector()  # Utilise les constantes du module
         self.motors = MotorController()
         
         # Serveur HTTP pour streaming
@@ -800,16 +198,16 @@ class AutonomousNavigator:
         self.http_thread = None
         self._start_http_server()
         
-        # État
+        # État de navigation
         self.current_state = "INIT"
         self.last_obstacle_position = None
         self.escape_direction = None
         self.escape_steps = 0
-        self.max_escape_steps = 10  # Max pas de translation avant de réessayer
+        self.max_escape_steps = 10
         
         # Gestion rotation en cas de danger
-        self.danger_count = 0  # Compteur de détections STOP consécutives
-        self.rotation_direction = None  # Direction de rotation choisie
+        self.danger_count = 0
+        self.rotation_direction = None
         
         # Stats
         self.detection_count = 0
@@ -821,7 +219,7 @@ class AutonomousNavigator:
     def _start_http_server(self):
         """Démarre le serveur HTTP pour le streaming"""
         try:
-            self.http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), StreamHandler)
+            self.http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), NavigationStreamHandler)
             self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
             self.http_thread.start()
             logger.info(f"✓ Serveur HTTP sur port {HTTP_PORT}")
@@ -834,13 +232,9 @@ class AutonomousNavigator:
         """
         Machine à états pour décider de l'action
         Retourne: 'forward', 'slide_left', 'slide_right', 'pivot_left', 'pivot_right', 'stop'
-        
-        Logique:
-        - Analyse à chaque itération
-        - Fait UN SEUL pas de rotation si STOP, puis réévalue
         """
         
-        # DANGER: Obstacle très proche au centre -> ROTATION (1 pas à la fois, puis réévaluation)
+        # DANGER: Obstacle très proche au centre -> ROTATION (1 pas à la fois)
         if danger == "STOP":
             self.danger_count += 1
             self.current_state = "DANGER"
@@ -861,10 +255,8 @@ class AutonomousNavigator:
             elif right_clear and not left_clear:
                 self.rotation_direction = "RIGHT"
             elif self.rotation_direction is None:
-                # Par défaut, tourner à gauche
                 self.rotation_direction = "LEFT"
             
-            # Faire UN SEUL pas de rotation, puis réévaluer à la prochaine itération
             logger.info(f"🔄 DANGER! Rotation {'GAUCHE' if self.rotation_direction == 'LEFT' else 'DROITE'} (1 pas)")
             
             if self.rotation_direction == "LEFT":
@@ -885,19 +277,17 @@ class AutonomousNavigator:
             else:
                 return 'slide_right'
         
-        # Obstacles des deux côtés -> essayer de glisser, puis rotation si bloqué
+        # Obstacles des deux côtés
         if position == "BOTH":
             self.current_state = "BLOCKED"
             self.escape_steps += 1
             
-            # Après plusieurs tentatives de glissement, faire UN pas de rotation
             if self.escape_steps > 6:
                 self.escape_steps = 0
                 if self.rotation_direction is None:
                     self.rotation_direction = "LEFT"
                 return 'pivot_left' if self.rotation_direction == "LEFT" else 'pivot_right'
             
-            # Alterner la direction de glissement
             if self.escape_steps % 6 < 3:
                 return 'slide_left'
             else:
@@ -930,10 +320,7 @@ class AutonomousNavigator:
         return 'forward'
     
     def _handle_keyboard(self):
-        """
-        Gère les entrées clavier
-        Retourne True si on doit quitter
-        """
+        """Gère les entrées clavier. Retourne True si on doit quitter."""
         key = self.keyboard.get_key()
         
         if key is None:
@@ -942,7 +329,6 @@ class AutonomousNavigator:
         # Espace = Démarrer/Pause/Reprendre
         if key == ' ':
             if not self.started:
-                # Premier démarrage
                 self.started = True
                 self.paused = False
                 self.start_time = time.time()
@@ -951,14 +337,12 @@ class AutonomousNavigator:
                 logger.info("   ESPACE = Pause/Reprendre")
                 logger.info("=" * 50)
             else:
-                # Pause/Reprendre
                 self.paused = not self.paused
                 if self.paused:
                     self.motors.stop()
                     logger.info("⏸️  PAUSE - Appuyez sur ESPACE pour reprendre")
                 else:
                     logger.info("▶️  REPRISE de la navigation")
-                    self.step_index = 0
             return False
         
         # Ctrl+C ou 'q' = Quitter
@@ -986,33 +370,29 @@ class AutonomousNavigator:
                 if self._handle_keyboard():
                     break
                 
-                # Capturer frame (même en pause pour le streaming)
+                # Capturer frame
                 frame = self.camera.get_frame()
                 
                 # Si en pause ou pas encore démarré
                 if self.paused:
                     if frame is not None:
-                        # Afficher quand même le flux avec message d'attente
                         display_frame = frame.copy()
                         h, w = display_frame.shape[:2]
                         
                         if not self.started:
-                            # Message d'attente de démarrage
                             msg = "Appuyez sur ESPACE pour demarrer"
                             cv2.putText(display_frame, msg, (w//2 - 180, h//2), 
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                             status = "ATTENTE"
                         else:
-                            # Message de pause
                             msg = "PAUSE - ESPACE pour reprendre"
                             cv2.putText(display_frame, msg, (w//2 - 160, h//2), 
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                             status = "PAUSE"
                         
-                        # Mettre à jour le stream HTTP
-                        with StreamHandler.shared_lock:
-                            StreamHandler.shared_frame = display_frame
-                            StreamHandler.shared_stats = {
+                        with NavigationStreamHandler.shared_lock:
+                            NavigationStreamHandler.shared_frame = display_frame
+                            NavigationStreamHandler.shared_stats = {
                                 'fps': 0,
                                 'obstacles': 0,
                                 'danger': status,
@@ -1032,10 +412,10 @@ class AutonomousNavigator:
                 obstacles, danger, position = self.detector.detect(frame)
                 self.detection_count += 1
                 
-                # Décider action (passer les obstacles pour analyse)
+                # Décider action
                 action = self._decide_action(danger, position, obstacles)
                 
-                # Dessiner les obstacles sur la frame pour le streaming
+                # Dessiner les obstacles
                 display_frame = self.detector.draw(frame.copy(), obstacles, danger, position)
                 
                 # Ajouter infos sur la frame
@@ -1050,15 +430,13 @@ class AutonomousNavigator:
                     'stop': 'STOP'
                 }.get(action, action)
                 status_text = f"{action_text} | {det_fps:.1f} det/s"
-                if self.paused:
-                    status_text = "PAUSE | " + status_text
                 cv2.putText(display_frame, status_text, (5, 15), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                 
                 # Mettre à jour le stream HTTP
-                with StreamHandler.shared_lock:
-                    StreamHandler.shared_frame = display_frame
-                    StreamHandler.shared_stats = {
+                with NavigationStreamHandler.shared_lock:
+                    NavigationStreamHandler.shared_frame = display_frame
+                    NavigationStreamHandler.shared_stats = {
                         'fps': det_fps,
                         'obstacles': len(obstacles),
                         'danger': danger,
@@ -1083,9 +461,6 @@ class AutonomousNavigator:
                 
                 # Log toutes les secondes
                 if time.time() - last_log_time >= 1.0:
-                    elapsed = time.time() - self.start_time
-                    det_fps = self.detection_count / elapsed if elapsed > 0 else 0
-                    
                     action_symbols = {
                         'forward': '⬆️  AVANCE',
                         'slide_left': '⬅️  GAUCHE',
@@ -1118,21 +493,14 @@ class AutonomousNavigator:
         logger.info("Arrêt en cours...")
         self.running = False
         
-        # Arrêter les moteurs et position initiale
         self.motors.stop()
         time.sleep(0.5)
-        
-        # Déconnecter les moteurs
         self.motors.disconnect()
-        
-        # Arrêter la caméra
         self.camera.stop()
         
-        # Arrêter le serveur HTTP
         if self.http_server:
             self.http_server.shutdown()
         
-        # Restaurer le terminal
         self.keyboard.restore()
         
         logger.info("✓ Navigation arrêtée proprement")
@@ -1144,7 +512,6 @@ class AutonomousNavigator:
 # ============================================================================
 
 def main():
-    # Ignorer SIGINT pour le gérer manuellement
     original_sigint = signal.getsignal(signal.SIGINT)
     
     print()
@@ -1185,7 +552,6 @@ def main():
     finally:
         if navigator:
             navigator.stop()
-        # Restaurer le handler SIGINT original
         signal.signal(signal.SIGINT, original_sigint)
 
 
