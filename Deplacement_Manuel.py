@@ -9,6 +9,7 @@ import time
 import threading
 import json
 import logging
+import signal
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -259,20 +260,68 @@ def start_http_server():
             time.sleep(1)
         
         http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), ManualStreamHandler)
+        http_server.daemon_threads = True
         http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
         http_thread.start()
         logger.info(f"[OK] Serveur HTTP démarré sur port {HTTP_PORT}")
         logger.info(f"  Interface web: http://localhost:{HTTP_PORT}")
         logger.info(f"  SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
-        return http_server
+        return http_server, http_thread
     except Exception as e:
         logger.error(f"Impossible de démarrer le serveur HTTP: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return None
+        return None, None
 
 
 def main():
+    # Variables pour le nettoyage
+    motors = None
+    keyboard = None
+    camera = None
+    http_server = None
+    http_thread = None
+    
+    def signal_handler(sig, frame):
+        """Gestionnaire de signaux pour arrêt propre"""
+        logger.info("\nSignal d'arrêt reçu...")
+        cleanup_and_exit()
+    
+    def cleanup_and_exit():
+        """Fonction de nettoyage propre"""
+        logger.info("Nettoyage en cours...")
+        
+        if motors:
+            logger.info("Arrêt des moteurs...")
+            motors.stop()
+            time.sleep(0.5)
+            motors.disconnect()
+        
+        if camera:
+            logger.info("Arrêt de la caméra...")
+            camera.stop()
+        
+        if http_server:
+            logger.info("Arrêt du serveur HTTP...")
+            try:
+                http_server.shutdown()
+                http_server.server_close()
+                if http_thread and http_thread.is_alive():
+                    http_thread.join(timeout=2)
+                logger.info("[OK] Serveur HTTP arrêté")
+            except Exception as e:
+                logger.warning(f"Erreur lors de l'arrêt du serveur HTTP: {e}")
+        
+        if keyboard:
+            keyboard.restore()
+        
+        logger.info("[OK] Système arrêté proprement")
+        exit(0)
+    
+    # Installer les gestionnaires de signaux
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     print("\n" + "=" * 60)
     print("    HEXAPODE - CONTRÔLE MANUEL avec FLUX VIDÉO")
     print("=" * 60)
@@ -289,7 +338,7 @@ def main():
     print(f"  SSH: ssh -L {HTTP_PORT}:localhost:{HTTP_PORT} user@[IP]")
     print(f"  Puis: http://localhost:{HTTP_PORT}")
     print("=" * 60)
-    print("\nInitialisation...")
+    print("\nInitialisation en cours, patientez...")
     
     # Initialisation
     logger.info("Initialisation des composants...")
@@ -320,7 +369,7 @@ def main():
         return
     
     # Démarrer le serveur HTTP
-    http_server = start_http_server()
+    http_server, http_thread = start_http_server()
     if http_server is None:
         logger.error("Impossible de démarrer le serveur HTTP - arrêt")
         motors.disconnect()
@@ -331,8 +380,8 @@ def main():
     video_thread = start_video_thread(camera)
     
     # Attendre que la caméra soit prête
-    logger.info("Attente initialisation caméra...")
-    time.sleep(2)
+    logger.info("Attente initialisation caméra et serveur...")
+    time.sleep(4)  # Tempo plus longue pour initialisation propre
     
     # Test de capture d'une frame
     test_frame = camera.get_frame()
@@ -376,6 +425,7 @@ def main():
                 
                 # Quitter
                 if key == 'x':
+                    cleanup_and_exit()
                     break
                 
                 # Changer d'action
@@ -415,20 +465,14 @@ def main():
     
     except KeyboardInterrupt:
         print("\n\nInterruption...")
+        cleanup_and_exit()
+    
+    except Exception as e:
+        logger.error(f"Erreur inattendue: {e}")
+        cleanup_and_exit()
     
     finally:
-        # Nettoyage
-        motors.stop()
-        time.sleep(0.5)
-        motors.disconnect()
-        camera.stop()
-        
-        if http_server:
-            http_server.shutdown()
-        
-        keyboard.restore()
-        logger.info("[OK] Système arrêté proprement")
-        print("Fin.")
+        cleanup_and_exit()
 
 
 if __name__ == '__main__':

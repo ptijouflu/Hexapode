@@ -213,13 +213,27 @@ class AutonomousNavigator:
         self.detection_count = 0
         self.start_time = None
         
-        time.sleep(1)  # Attendre initialisation camera
+        logger.info("Initialisation en cours, patientez...")
+        time.sleep(3)  # Tempo plus longue pour initialisation propre
         logger.info("[OK] Navigateur autonome initialisé")
     
     def _start_http_server(self):
         """Démarre le serveur HTTP pour le streaming"""
         try:
+            # Vérifier si le port est disponible
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('localhost', HTTP_PORT))
+            sock.close()
+            
+            if result == 0:
+                logger.warning(f"Port {HTTP_PORT} déjà utilisé, tentative d'arrêt du processus existant...")
+                import os
+                os.system(f"pkill -f 'python.*{HTTP_PORT}'")
+                time.sleep(1)
+            
             self.http_server = ThreadedHTTPServer(('0.0.0.0', HTTP_PORT), NavigationStreamHandler)
+            self.http_server.daemon_threads = True
             self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
             self.http_thread.start()
             logger.info(f"[OK] Serveur HTTP sur port {HTTP_PORT}")
@@ -227,6 +241,7 @@ class AutonomousNavigator:
             logger.info(f"  Puis: http://localhost:{HTTP_PORT}")
         except Exception as e:
             logger.warning(f"Impossible de démarrer le serveur HTTP: {e}")
+            self.http_server = None
     
     def _decide_action(self, danger, position, obstacles):
         """
@@ -493,14 +508,29 @@ class AutonomousNavigator:
         logger.info("Arrêt en cours...")
         self.running = False
         
+        # Arrêter les moteurs
+        logger.info("Arrêt des moteurs...")
         self.motors.stop()
         time.sleep(0.5)
         self.motors.disconnect()
+        
+        # Arrêter la caméra
+        logger.info("Arrêt de la caméra...")
         self.camera.stop()
         
+        # Arrêter le serveur HTTP proprement
         if self.http_server:
-            self.http_server.shutdown()
+            logger.info("Arrêt du serveur HTTP...")
+            try:
+                self.http_server.shutdown()
+                self.http_server.server_close()
+                if self.http_thread and self.http_thread.is_alive():
+                    self.http_thread.join(timeout=2)
+                logger.info("[OK] Serveur HTTP arrêté")
+            except Exception as e:
+                logger.warning(f"Erreur lors de l'arrêt du serveur HTTP: {e}")
         
+        # Restaurer le clavier
         self.keyboard.restore()
         
         logger.info("[OK] Navigation arrêtée proprement")
@@ -513,6 +543,19 @@ class AutonomousNavigator:
 
 def main():
     original_sigint = signal.getsignal(signal.SIGINT)
+    navigator = None
+    
+    def signal_handler(sig, frame):
+        """Gestionnaire de signaux pour arrêt propre"""
+        logger.info("\nSignal d'arrêt reçu...")
+        if navigator:
+            navigator.quit_requested = True
+            navigator.stop()
+        exit(0)
+    
+    # Installer le gestionnaire de signaux
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     print()
     print("=" * 60)
@@ -539,14 +582,15 @@ def main():
     print()
     print("=" * 60)
     print()
-    print("    Initialisation...")
+    print("    Initialisation en cours...")
     
-    time.sleep(2)
+    time.sleep(3)  # Tempo plus longue pour initialisation propre
     
-    navigator = None
     try:
         navigator = AutonomousNavigator()
         navigator.run()
+    except KeyboardInterrupt:
+        logger.info("\nInterruption clavier détectée")
     except Exception as e:
         logger.error(f"Erreur: {e}")
     finally:
