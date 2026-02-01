@@ -10,7 +10,7 @@ import urllib.error
 import time as time_module
 from PyQt6.QtGui import QImage, QPixmap
 from video_signals import VideoSignals
-from config import DEFAULT_VIDEO_URL
+from config import DEFAULT_VIDEO_URL, VIDEO_RECONNECT_INTERVAL
 
 
 class VideoStreamReader:
@@ -71,9 +71,10 @@ class VideoStreamReader:
                             self.signals.frame_ready.emit(pixmap)
                 
             except urllib.error.URLError:
-                self.signals.status_changed.emit("Flux non disponible")
-                time_module.sleep(2)
+                if self.running:
+                    self.signals.status_changed.emit(f"Flux non disponible - Réessai dans {VIDEO_RECONNECT_INTERVAL}s...")
+                time_module.sleep(VIDEO_RECONNECT_INTERVAL)
             except Exception as e:
                 if self.running:
-                    self.signals.status_changed.emit(f"Erreur: {str(e)[:30]}")
-                time_module.sleep(2)
+                    self.signals.status_changed.emit(f"Erreur: {str(e)[:30]} - Réessai dans {VIDEO_RECONNECT_INTERVAL}s...")
+                time_module.sleep(VIDEO_RECONNECT_INTERVAL)

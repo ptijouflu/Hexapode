@@ -8,6 +8,7 @@ Configuration constants for SSH GUI Application
 DEFAULT_VIDEO_URL = "http://localhost:8081/stream"
 DEFAULT_VIDEO_WIDTH = 640
 DEFAULT_VIDEO_HEIGHT = 240
+VIDEO_RECONNECT_INTERVAL = 2  # Intervalle de reconnexion en secondes
 
 # Navigation SSH
 DEFAULT_SSH_FOLDER = "Hexapode"
