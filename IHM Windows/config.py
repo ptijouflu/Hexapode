@@ -10,7 +10,7 @@ DEFAULT_VIDEO_WIDTH = 640
 DEFAULT_VIDEO_HEIGHT = 240
 
 # Navigation SSH
-DEFAULT_SSH_FOLDER = "Documents/Hexapode"
+DEFAULT_SSH_FOLDER = "Hexapode"
 NAVIGATION_DELAY = 0.5  # Secondes d'attente avant de naviguer
 
 # Fenêtre
